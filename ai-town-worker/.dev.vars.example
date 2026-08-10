@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local Worker development.
+# Leave these blank until you are ready to connect SiliconFlow.
+SILICONFLOW_API_KEY=
+SILICONFLOW_MODEL=
+SILICONFLOW_CHAT_URL=https://api.siliconflow.cn/v1/chat/completions

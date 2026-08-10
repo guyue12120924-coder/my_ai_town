@@ -1,0 +1,12 @@
+{
+  "name": "my-ai-town-web",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-10",
+  "workers_dev": true,
+  "r2_buckets": [
+    {
+      "binding": "WEB_BUCKET",
+      "bucket_name": "my-ai-town-web"
+    }
+  ]
+}

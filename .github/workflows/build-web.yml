@@ -1,0 +1,76 @@
+name: Build Godot Web
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "game/**"
+      - "ai-town-worker/**"
+      - ".github/workflows/build-web.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "game/**"
+      - "ai-town-worker/**"
+      - ".github/workflows/build-web.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: godot-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  export-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            game
+            ai-town-worker
+          sparse-checkout-cone-mode: true
+
+      - name: Build Cloudflare-ready Godot Web release
+        shell: bash
+        run: bash ai-town-worker/build-web.sh
+
+      - name: Validate chunk manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f ai-town-worker/public/index.html
+          test -f ai-town-worker/public/index.js
+          test -f ai-town-worker/public/index.wasm.parts.json
+          test -f ai-town-worker/public/index.pck.parts.json
+          test ! -f ai-town-worker/public/index.wasm
+          test ! -f ai-town-worker/public/index.pck
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("ai-town-worker/public")
+          for name in ("index.wasm", "index.pck"):
+              manifest = json.loads((root / f"{name}.parts.json").read_text(encoding="utf-8"))
+              assert manifest["contentEncoding"] == "gzip"
+              assert manifest["parts"]
+              for part in manifest["parts"]:
+                  path = root / part
+                  assert path.is_file(), path
+                  assert path.stat().st_size < 25 * 1024 * 1024, path
+          PY
+
+      - name: Upload Web build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-town-web-cloudflare
+          path: ai-town-worker/public
+          if-no-files-found: error
+          retention-days: 7

@@ -1,4 +1,11 @@
 name = "my-ai-town-agent"
-main = "src/worker.js"
+main = "src/web-worker.js"
 compatibility_date = "2026-08-10"
 keep_vars = true
+
+[build]
+command = "bash ./build-web.sh"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"

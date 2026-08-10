@@ -4,20 +4,21 @@ on:
   push:
     branches:
       - main
-      - agent/web-cloudflare-pages
     paths:
       - "game/**"
+      - "cloudflare/**"
       - ".github/workflows/build-web.yml"
   pull_request:
     branches:
       - main
     paths:
       - "game/**"
+      - "cloudflare/**"
       - ".github/workflows/build-web.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: godot-web-${{ github.ref }}
@@ -26,7 +27,7 @@ concurrency:
 jobs:
   export-web:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       GODOT_VERSION: "4.7"
       GODOT_STATUS: "stable"
@@ -83,33 +84,24 @@ jobs:
           mkdir -p release/ai-town-web
           "$GODOT_BIN" --headless --path game --export-release "Web" ../release/ai-town-web/index.html
           test -f release/ai-town-web/index.html
+          test -f release/ai-town-web/index.js
+          test -f release/ai-town-web/index.wasm
+          test -f release/ai-town-web/index.pck
 
-      - name: Check Cloudflare Pages asset limits
+      - name: Report Web build size
         shell: bash
         run: |
           set -euo pipefail
           echo "Largest exported files:"
-          find release/ai-town-web -type f -printf '%s %p\n' | sort -nr | head -n 20 | numfmt --field=1 --to=iec-i --suffix=B
+          find release/ai-town-web -type f -printf '%s %p\n' \
+            | sort -nr \
+            | head -n 20 \
+            | numfmt --field=1 --to=iec-i --suffix=B
           echo
           du -sh release/ai-town-web
-          LIMIT_BYTES=$((25 * 1024 * 1024))
-          mapfile -t TOO_LARGE < <(find release/ai-town-web -type f -size +${LIMIT_BYTES}c -print)
-          if (( ${#TOO_LARGE[@]} > 0 )); then
-            echo "Cloudflare Pages rejects individual assets above 25 MiB:" >&2
-            printf '  %s\n' "${TOO_LARGE[@]}" >&2
-            exit 42
-          fi
-
-      - name: Add Cloudflare Pages metadata
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s\n' \
-            '/*' \
-            '  Cache-Control: public, max-age=0, must-revalidate' \
-            > release/ai-town-web/_headers
-          touch release/ai-town-web/.nojekyll
-          printf '%s\n' "${GITHUB_SHA}" > release/ai-town-web/build-commit.txt
+          echo
+          echo "Cloudflare Pages has a 25 MiB single-file limit."
+          echo "This project is intentionally deployed through R2 + Worker because the Godot .pck/.wasm can exceed that limit."
 
       - name: Upload Web build artifact
         uses: actions/upload-artifact@v4
@@ -119,22 +111,108 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish web-build branch
-        if: github.ref == 'refs/heads/main'
+  deploy-cloudflare:
+    needs: export-web
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_BUCKET: my-ai-town-web
+    steps:
+      - name: Checkout Cloudflare worker
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            cloudflare
+          sparse-checkout-cone-mode: true
+
+      - name: Download Web build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-town-web
+          path: release/ai-town-web
+
+      - name: Check Cloudflare deployment credentials
+        id: cloudflare
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          PUBLISH_DIR="$RUNNER_TEMP/web-publish"
-          rm -rf "$PUBLISH_DIR"
-          mkdir -p "$PUBLISH_DIR"
-          cp -a release/ai-town-web/. "$PUBLISH_DIR/"
-          cd "$PUBLISH_DIR"
-          git init -b web-build
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Web build ${GITHUB_SHA::7}"
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push --force origin HEAD:web-build
+          if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Cloudflare credentials found; deployment will run."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Cloudflare deployment skipped. Add repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, then run this workflow again."
+          fi
+
+      - name: Ensure R2 bucket exists
+        if: steps.cloudflare.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if npx --yes wrangler@4 r2 bucket info "$R2_BUCKET" >/dev/null 2>&1; then
+            echo "R2 bucket already exists: $R2_BUCKET"
+          else
+            echo "Creating R2 bucket: $R2_BUCKET"
+            npx --yes wrangler@4 r2 bucket create "$R2_BUCKET"
+          fi
+
+      - name: Upload Godot Web files to R2
+        if: steps.cloudflare.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upload_object() {
+            local file="$1"
+            local key="${file#release/ai-town-web/}"
+            local content_type="application/octet-stream"
+            local upload_file="$file"
+            local -a encoding_args=()
+
+            case "$key" in
+              *.html) content_type="text/html; charset=utf-8" ;;
+              *.js) content_type="application/javascript; charset=utf-8" ;;
+              *.wasm) content_type="application/wasm" ;;
+              *.pck) content_type="application/octet-stream" ;;
+              *.json) content_type="application/json; charset=utf-8" ;;
+              *.png) content_type="image/png" ;;
+              *.svg) content_type="image/svg+xml" ;;
+              *.ico) content_type="image/x-icon" ;;
+              *.webmanifest) content_type="application/manifest+json" ;;
+            esac
+
+            if [[ "$key" == *.wasm || "$key" == *.pck ]]; then
+              local compressed="$RUNNER_TEMP/$(basename "$file").gz"
+              gzip -9 -c "$file" > "$compressed"
+              upload_file="$compressed"
+              encoding_args=(--content-encoding gzip)
+              printf 'Uploading %s (gzip %s -> %s)\n' \
+                "$key" \
+                "$(du -h "$file" | cut -f1)" \
+                "$(du -h "$compressed" | cut -f1)"
+            else
+              printf 'Uploading %s (%s)\n' "$key" "$(du -h "$file" | cut -f1)"
+            fi
+
+            npx --yes wrangler@4 r2 object put "$R2_BUCKET/$key" \
+              --file "$upload_file" \
+              --content-type "$content_type" \
+              --cache-control "public, max-age=0, must-revalidate" \
+              "${encoding_args[@]}" \
+              --remote \
+              --force
+          }
+
+          while IFS= read -r -d '' file; do
+            upload_object "$file"
+          done < <(find release/ai-town-web -type f -print0)
+
+      - name: Deploy Web gateway Worker
+        if: steps.cloudflare.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4 deploy --config cloudflare/wrangler.jsonc

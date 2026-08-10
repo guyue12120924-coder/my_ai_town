@@ -34,6 +34,10 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            game
+          sparse-checkout-cone-mode: true
 
       - name: Download Godot 4.7
         shell: bash

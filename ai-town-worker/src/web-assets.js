@@ -80,6 +80,7 @@ function chunkedHeaders(manifest, contentType) {
     "Content-Type": manifest.contentType || contentType,
     "Content-Encoding": manifest.contentEncoding || "gzip",
     "Cache-Control": "public, max-age=0, must-revalidate",
+    "Vary": "Accept-Encoding",
     "X-Content-Type-Options": "nosniff",
     "X-AI-Town-Chunked-Asset": "1",
   });
@@ -112,9 +113,15 @@ async function serveLargeAsset(request, env, pathname, contentType) {
     return new Response(null, { status: 200, headers });
   }
 
+  // The chunk stream already contains a complete gzip-encoded representation.
+  // Cloudflare defaults to encodeBody="automatic" and may compress a response
+  // again when Content-Encoding is present. Mark the body as pre-encoded so the
+  // browser receives exactly one gzip layer and transparently decodes it before
+  // WebAssembly.instantiateStreaming() sees the bytes.
   return new Response(createChunkStream(request, env, manifest.parts), {
     status: 200,
     headers,
+    encodeBody: "manual",
   });
 }
 

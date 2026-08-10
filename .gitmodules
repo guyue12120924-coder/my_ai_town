@@ -1,0 +1,3 @@
+[submodule "vendor/unlimited-ai-first"]
+	path = vendor/unlimited-ai-first
+	url = https://github.com/guyue12120924-coder/unlimited-ai-first.git

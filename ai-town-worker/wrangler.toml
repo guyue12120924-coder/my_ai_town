@@ -1,0 +1,7 @@
+name = "my-ai-town-agent"
+main = "src/worker.js"
+compatibility_date = "2026-08-10"
+
+[vars]
+SILICONFLOW_MODEL = ""
+SILICONFLOW_CHAT_URL = "https://api.siliconflow.cn/v1/chat/completions"

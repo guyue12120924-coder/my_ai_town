@@ -6,14 +6,14 @@ on:
       - main
     paths:
       - "game/**"
-      - "cloudflare/**"
+      - "ai-town-worker/**"
       - ".github/workflows/build-web.yml"
   pull_request:
     branches:
       - main
     paths:
       - "game/**"
-      - "cloudflare/**"
+      - "ai-town-worker/**"
       - ".github/workflows/build-web.yml"
   workflow_dispatch:
 
@@ -28,191 +28,49 @@ jobs:
   export-web:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      GODOT_VERSION: "4.7"
-      GODOT_STATUS: "stable"
-      GODOT_TEMPLATE_DIR: "4.7.stable"
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
             game
+            ai-town-worker
           sparse-checkout-cone-mode: true
 
-      - name: Download Godot 4.7
+      - name: Build Cloudflare-ready Godot Web release
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/godot"
-          curl --fail --location --retry 3 \
-            "https://downloads.godotengine.org/?version=${GODOT_VERSION}&flavor=${GODOT_STATUS}&slug=linux.x86_64.zip&platform=linux.64" \
-            --output "$RUNNER_TEMP/godot.zip"
-          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
-          GODOT_BIN="$(find "$RUNNER_TEMP/godot" -maxdepth 1 -type f -name 'Godot_*linux.x86_64' | head -n 1)"
-          test -n "$GODOT_BIN"
-          chmod +x "$GODOT_BIN"
-          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
-          "$GODOT_BIN" --version
+        run: bash ai-town-worker/build-web.sh
 
-      - name: Install Godot export templates
+      - name: Validate chunk manifests
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 \
-            "https://downloads.godotengine.org/?version=${GODOT_VERSION}&flavor=${GODOT_STATUS}&slug=export_templates.tpz&platform=templates" \
-            --output "$RUNNER_TEMP/export_templates.tpz"
-          rm -rf "$RUNNER_TEMP/export_templates"
-          mkdir -p "$RUNNER_TEMP/export_templates"
-          unzip -q "$RUNNER_TEMP/export_templates.tpz" -d "$RUNNER_TEMP/export_templates"
-          TARGET="$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_DIR}"
-          mkdir -p "$TARGET"
-          cp -a "$RUNNER_TEMP/export_templates/templates/." "$TARGET/"
-          test -f "$TARGET/web_release.zip"
+          test -f ai-town-worker/public/index.html
+          test -f ai-town-worker/public/index.js
+          test -f ai-town-worker/public/index.wasm.parts.json
+          test -f ai-town-worker/public/index.pck.parts.json
+          test ! -f ai-town-worker/public/index.wasm
+          test ! -f ai-town-worker/public/index.pck
 
-      - name: Import Godot resources
-        shell: bash
-        run: |
-          set -euo pipefail
-          "$GODOT_BIN" --headless --path game --import
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
 
-      - name: Export Web release
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf release/ai-town-web
-          mkdir -p release/ai-town-web
-          "$GODOT_BIN" --headless --path game --export-release "Web" ../release/ai-town-web/index.html
-          test -f release/ai-town-web/index.html
-          test -f release/ai-town-web/index.js
-          test -f release/ai-town-web/index.wasm
-          test -f release/ai-town-web/index.pck
-
-      - name: Report Web build size
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Largest exported files:"
-          find release/ai-town-web -type f -printf '%s %p\n' \
-            | sort -nr \
-            | head -n 20 \
-            | numfmt --field=1 --to=iec-i --suffix=B
-          echo
-          du -sh release/ai-town-web
-          echo
-          echo "Cloudflare Pages has a 25 MiB single-file limit."
-          echo "This project is intentionally deployed through R2 + Worker because the Godot .pck/.wasm can exceed that limit."
+          root = Path("ai-town-worker/public")
+          for name in ("index.wasm", "index.pck"):
+              manifest = json.loads((root / f"{name}.parts.json").read_text(encoding="utf-8"))
+              assert manifest["contentEncoding"] == "gzip"
+              assert manifest["parts"]
+              for part in manifest["parts"]:
+                  path = root / part
+                  assert path.is_file(), path
+                  assert path.stat().st_size < 25 * 1024 * 1024, path
+          PY
 
       - name: Upload Web build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ai-town-web
-          path: release/ai-town-web
+          name: ai-town-web-cloudflare
+          path: ai-town-worker/public
           if-no-files-found: error
           retention-days: 7
-
-  deploy-cloudflare:
-    needs: export-web
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      R2_BUCKET: my-ai-town-web
-    steps:
-      - name: Checkout Cloudflare worker
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            cloudflare
-          sparse-checkout-cone-mode: true
-
-      - name: Download Web build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ai-town-web
-          path: release/ai-town-web
-
-      - name: Check Cloudflare deployment credentials
-        id: cloudflare
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            echo "Cloudflare credentials found; deployment will run."
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Cloudflare deployment skipped. Add repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, then run this workflow again."
-          fi
-
-      - name: Ensure R2 bucket exists
-        if: steps.cloudflare.outputs.ready == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if npx --yes wrangler@4 r2 bucket info "$R2_BUCKET" >/dev/null 2>&1; then
-            echo "R2 bucket already exists: $R2_BUCKET"
-          else
-            echo "Creating R2 bucket: $R2_BUCKET"
-            npx --yes wrangler@4 r2 bucket create "$R2_BUCKET"
-          fi
-
-      - name: Upload Godot Web files to R2
-        if: steps.cloudflare.outputs.ready == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          upload_object() {
-            local file="$1"
-            local key="${file#release/ai-town-web/}"
-            local content_type="application/octet-stream"
-            local upload_file="$file"
-            local -a encoding_args=()
-
-            case "$key" in
-              *.html) content_type="text/html; charset=utf-8" ;;
-              *.js) content_type="application/javascript; charset=utf-8" ;;
-              *.wasm) content_type="application/wasm" ;;
-              *.pck) content_type="application/octet-stream" ;;
-              *.json) content_type="application/json; charset=utf-8" ;;
-              *.png) content_type="image/png" ;;
-              *.svg) content_type="image/svg+xml" ;;
-              *.ico) content_type="image/x-icon" ;;
-              *.webmanifest) content_type="application/manifest+json" ;;
-            esac
-
-            if [[ "$key" == *.wasm || "$key" == *.pck ]]; then
-              local compressed="$RUNNER_TEMP/$(basename "$file").gz"
-              gzip -9 -c "$file" > "$compressed"
-              upload_file="$compressed"
-              encoding_args=(--content-encoding gzip)
-              printf 'Uploading %s (gzip %s -> %s)\n' \
-                "$key" \
-                "$(du -h "$file" | cut -f1)" \
-                "$(du -h "$compressed" | cut -f1)"
-            else
-              printf 'Uploading %s (%s)\n' "$key" "$(du -h "$file" | cut -f1)"
-            fi
-
-            npx --yes wrangler@4 r2 object put "$R2_BUCKET/$key" \
-              --file "$upload_file" \
-              --content-type "$content_type" \
-              --cache-control "public, max-age=0, must-revalidate" \
-              "${encoding_args[@]}" \
-              --remote \
-              --force
-          }
-
-          while IFS= read -r -d '' file; do
-            upload_object "$file"
-          done < <(find release/ai-town-web -type f -print0)
-
-      - name: Deploy Web gateway Worker
-        if: steps.cloudflare.outputs.ready == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          npx --yes wrangler@4 deploy --config cloudflare/wrangler.jsonc

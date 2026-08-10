@@ -4,7 +4,7 @@ This directory is the thin adapter between the Godot AI Town and the existing `u
 
 The upstream project is preserved unchanged at `vendor/unlimited-ai-first` as a Git submodule pinned to commit `64409d7ad930e7ff5948f2c15764c440741d01ae`.
 
-The adapter intentionally reuses the upstream `src/context.js` character/context builder instead of rewriting it in GDScript. AI Town still owns world facts, action validation, execution, save/load and resident memory. The Worker enriches model context, forwards requests to SiliconFlow, and now also serves the Godot Web build from the same Cloudflare Worker.
+The adapter intentionally reuses the upstream `src/context.js` character/context builder instead of rewriting it in GDScript. AI Town still owns world facts, action validation, execution, save/load and resident memory. The Worker enriches model context, forwards requests to SiliconFlow, and also serves the Godot Web build from the same Cloudflare Worker.
 
 ## Cloudflare runtime configuration
 
@@ -78,7 +78,7 @@ Godot's generated `index.wasm` and `index.pck` are larger than Cloudflare's 25 M
 
 This keeps all uploaded static files below Cloudflare's limit while preserving the normal URLs expected by Godot. No R2 bucket or second Worker is required.
 
-The deployed Worker root (`/`) is the AI Town browser game. The AI backend remains on the same origin, which also avoids browser cross-origin setup for normal in-game model calls.
+The deployed Worker root (`/`) is the AI Town browser game. The AI backend remains on the same origin, so the Web build can use `/api/agent` without a separate cross-origin deployment.
 
 ## Godot connection
 

@@ -1,0 +1,130 @@
+name: Build Godot Web
+
+on:
+  push:
+    branches:
+      - main
+      - agent/web-cloudflare-pages
+    paths:
+      - "game/**"
+      - ".github/workflows/build-web.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: godot-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  export-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GODOT_VERSION: "4.7"
+      GODOT_STATUS: "stable"
+      GODOT_TEMPLATE_DIR: "4.7.stable"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Download Godot 4.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/godot"
+          curl --fail --location --retry 3 \
+            "https://downloads.godotengine.org/?version=${GODOT_VERSION}&flavor=${GODOT_STATUS}&slug=linux.x86_64.zip&platform=linux.64" \
+            --output "$RUNNER_TEMP/godot.zip"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          GODOT_BIN="$(find "$RUNNER_TEMP/godot" -maxdepth 1 -type f -name 'Godot_*linux.x86_64' | head -n 1)"
+          test -n "$GODOT_BIN"
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+          "$GODOT_BIN" --version
+
+      - name: Install Godot export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            "https://downloads.godotengine.org/?version=${GODOT_VERSION}&flavor=${GODOT_STATUS}&slug=export_templates.tpz&platform=templates" \
+            --output "$RUNNER_TEMP/export_templates.tpz"
+          rm -rf "$RUNNER_TEMP/export_templates"
+          mkdir -p "$RUNNER_TEMP/export_templates"
+          unzip -q "$RUNNER_TEMP/export_templates.tpz" -d "$RUNNER_TEMP/export_templates"
+          TARGET="$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_DIR}"
+          mkdir -p "$TARGET"
+          cp -a "$RUNNER_TEMP/export_templates/templates/." "$TARGET/"
+          test -f "$TARGET/web_release.zip"
+
+      - name: Import Godot resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless --path game --import
+
+      - name: Export Web release
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release/ai-town-web
+          mkdir -p release/ai-town-web
+          "$GODOT_BIN" --headless --path game --export-release "Web" ../release/ai-town-web/index.html
+          test -f release/ai-town-web/index.html
+
+      - name: Check Cloudflare Pages asset limits
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Largest exported files:"
+          find release/ai-town-web -type f -printf '%s %p\n' | sort -nr | head -n 20 | numfmt --field=1 --to=iec-i --suffix=B
+          echo
+          du -sh release/ai-town-web
+          LIMIT_BYTES=$((25 * 1024 * 1024))
+          mapfile -t TOO_LARGE < <(find release/ai-town-web -type f -size +${LIMIT_BYTES}c -print)
+          if (( ${#TOO_LARGE[@]} > 0 )); then
+            echo "Cloudflare Pages rejects individual assets above 25 MiB:" >&2
+            printf '  %s\n' "${TOO_LARGE[@]}" >&2
+            exit 42
+          fi
+
+      - name: Add Cloudflare Pages metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            '/*' \
+            '  Cache-Control: public, max-age=0, must-revalidate' \
+            > release/ai-town-web/_headers
+          touch release/ai-town-web/.nojekyll
+          printf '%s\n' "${GITHUB_SHA}" > release/ai-town-web/build-commit.txt
+
+      - name: Upload Web build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-town-web
+          path: release/ai-town-web
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish web-build branch
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PUBLISH_DIR="$RUNNER_TEMP/web-publish"
+          rm -rf "$PUBLISH_DIR"
+          mkdir -p "$PUBLISH_DIR"
+          cp -a release/ai-town-web/. "$PUBLISH_DIR/"
+          cd "$PUBLISH_DIR"
+          git init -b web-build
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Web build ${GITHUB_SHA::7}"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin HEAD:web-build

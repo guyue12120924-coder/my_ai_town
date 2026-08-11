@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 53599)
+Total output lines: 6450
+
 extends Node
 
 
@@ -1644,7 +1647,7 @@ func _on_startup_intent_requested(intent: StringName, payload: Dictionary) -> vo
 				return
 			var route_payload := payload.duplicate(true)
 			if not _internal_playtest_enabled():
-				var catalog := _startup_catalog_snapshot()
+				var catalog := _startup_new_game_catalog_snapshot()
 				if not bool(catalog.get("ok", false)):
 					_publish_startup_action_failure(intent, catalog)
 					return
@@ -2956,430 +2959,7 @@ func _open_custom_resident_creator() -> void:
 	if is_instance_valid(_custom_resident_creator_page):
 		return
 	var selection := get_tree().current_scene as Control
-	if selection == null or selection != _resident_selection:
-		_record_route_open_failure(
-			"CUSTOM_RESIDENT_CREATOR_ROUTE_HOST_UNAVAILABLE",
-			"新居民创建页面暂时打不开，请稍后再试。",
-			false,
-		)
-		return
-	var pool_result := _ensure_custom_resident_candidate_pool()
-	if not bool(pool_result.get("ok", false)):
-		_present_route_failure_result(
-			pool_result,
-			"新居民创建页面暂时打不开，请稍后再试。",
-		)
-		return
-	var base_catalog := FORMAL_CATALOG.load_catalog() as Dictionary
-	var world_data := _read_json(WORLD_DATA_PATH)
-	var service_script := load(CUSTOM_RESIDENT_CREATOR_SERVICE_PATH) as Script
-	if service_script == null:
-		_record_route_open_failure(
-			"CUSTOM_RESIDENT_CREATOR_SERVICE_UNAVAILABLE",
-			"新居民创建页面暂时打不开，请稍后再试。",
-		)
-		return
-	_custom_resident_creator_service = service_script.new()
-	var configured := _custom_resident_creator_service.call(
-		"configure",
-		_custom_resident_candidate_pool,
-		base_catalog,
-		world_data,
-		{
-			"draftId": "custom-resident-%d-%d" % [
-				_flow_generation,
-				Time.get_ticks_msec(),
-			],
-			"revision": maxi(int(_resident_selection_vm.get("revision", 1)), 1),
-		},
-	) as Dictionary
-	if not bool(configured.get("ok", false)):
-		_custom_resident_creator_service = null
-		_present_route_failure_result(
-			configured,
-			"新居民创建页面暂时打不开，请稍后再试。",
-		)
-		return
-	var bound := _startup_ui_adapter.call(
-		"bind_custom_resident_creator_service",
-		_custom_resident_creator_service,
-	) as Dictionary
-	if not bool(bound.get("ok", false)):
-		_custom_resident_creator_service = null
-		_present_route_failure_result(
-			bound,
-			"新居民创建页面暂时打不开，请稍后再试。",
-		)
-		return
-	var page_scene := load(CUSTOM_RESIDENT_CREATOR_SCENE_PATH) as PackedScene
-	var page: Control = null
-	if page_scene != null:
-		page = page_scene.instantiate() as Control
-	if page == null:
-		_startup_ui_adapter.call("bind_custom_resident_creator_service", null)
-		_custom_resident_creator_service = null
-		_record_route_open_failure(
-			"CUSTOM_RESIDENT_CREATOR_ROUTE_FAILED",
-			"新居民创建页面暂时打不开，请稍后再试。",
-		)
-		return
-	page.name = "CustomResidentCreatorRoute"
-	page.process_mode = Node.PROCESS_MODE_ALWAYS
-	page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	page.z_index = 2250
-	page.set("navigation_back_available", true)
-	page.call("bind_town_ui_adapter", _startup_ui_adapter)
-	_connect_once(
-		page,
-		"intent_requested",
-		Callable(self, "_on_custom_resident_creator_intent_requested"),
-	)
-	_connect_once(
-		page,
-		"action_blocked",
-		Callable(self, "_on_custom_resident_creator_action_blocked"),
-	)
-	_custom_resident_creator_page = page
-	selection.set_process_unhandled_input(false)
-	selection.add_child(page)
-	if page.has_method("focus_default_control"):
-		page.call_deferred("focus_default_control")
-	call_deferred("_apply_custom_resident_creator_route_affordances")
-
-
-func _ensure_custom_resident_candidate_pool() -> Dictionary:
-	if _custom_resident_candidate_pool != null:
-		return {
-			"ok": true,
-			"errorCode": "",
-			"retryable": false,
-			"candidatePoolRevision": int(
-				_custom_resident_candidate_pool.candidate_pool_revision(),
-			),
-		}
-	if _custom_resident_library == null:
-		var library_path := _custom_resident_library_path()
-		if library_path.is_empty():
-			return _failure("CUSTOM_RESIDENT_LIBRARY_PATH_INVALID", false)
-		_custom_resident_library = CUSTOM_RESIDENT_LIBRARY.new()
-		var library_configured := _custom_resident_library.configure(library_path) as Dictionary
-		if not bool(library_configured.get("ok", false)):
-			_custom_resident_library = null
-			return library_configured
-	var library := _custom_resident_library.load_library() as Dictionary
-	if not bool(library.get("ok", false)):
-		return library
-	var base_catalog := FORMAL_CATALOG.load_catalog() as Dictionary
-	_custom_resident_candidate_pool = CUSTOM_RESIDENT_CANDIDATE_POOL.new()
-	var configured := _custom_resident_candidate_pool.configure(base_catalog,
-		{
-			"candidatePoolRevision": int(library.get("libraryRevision", 1)),
-			"customCandidates": (
-				library.get("candidates", []) as Array
-			).duplicate(true),
-			"persistence": _custom_resident_library,
-		}) as Dictionary
-	if not bool(configured.get("ok", false)):
-		_custom_resident_candidate_pool = null
-	return configured
-
-
-func _custom_resident_library_path() -> String:
-	var override := OS.get_environment(
-		CUSTOM_RESIDENT_LIBRARY_PATH_ENV,
-	).strip_edges()
-	if override.is_empty():
-		return String(CUSTOM_RESIDENT_LIBRARY.DEFAULT_PATH)
-	if (
-		override.begins_with("%s/" % String(CUSTOM_RESIDENT_LIBRARY.TEST_ROOT))
-		and not override.contains("..")
-		and override.ends_with(".json")
-	):
-		return override
-	return ""
-
-
-func _on_custom_resident_creator_intent_requested(
-	intent: String,
-	payload: Dictionary,
-) -> void:
-	if intent not in [
-		"custom_resident_creator.cancel",
-		"custom_resident_creator.open_wardrobe",
-		"custom_resident_creator.apply_wardrobe_result",
-		"custom_resident_creator.create",
-	]:
-		return
-	var route_only := bool(payload.get("routeOnly", false))
-	var dispatch_result := payload.get("dispatchResult", {}) as Dictionary
-	if not route_only and not bool(dispatch_result.get("ok", false)):
-		_last_result = dispatch_result.duplicate(true)
-		return
-	if intent == "custom_resident_creator.cancel":
-		call_deferred("_close_custom_resident_creator", true)
-		return
-	if intent == "custom_resident_creator.open_wardrobe":
-		var handoff := dispatch_result.get("wardrobeHandoff", {}) as Dictionary
-		if (
-			handoff.is_empty()
-			or not is_instance_valid(_custom_resident_creator_page)
-			or not _custom_resident_creator_page.has_method(
-				"open_complete_set_wardrobe",
-			)
-			or not bool(_custom_resident_creator_page.call(
-				"open_complete_set_wardrobe",
-				handoff.duplicate(true),
-			))
-		):
-			_last_result = _failure(
-				"CUSTOM_RESIDENT_WARDROBE_ROUTE_UNAVAILABLE",
-				false,
-			)
-		return
-	if intent == "custom_resident_creator.apply_wardrobe_result":
-		return
-	var handoff := dispatch_result.get("selectionHandoff", {}) as Dictionary
-	if handoff.is_empty():
-		_last_result = _failure("CUSTOM_RESIDENT_SELECTION_HANDOFF_MISSING", false)
-		return
-	call_deferred(
-		"_complete_custom_resident_creation",
-		handoff.duplicate(true),
-		_flow_generation,
-	)
-
-
-func _on_custom_resident_creator_action_blocked(
-	_intent: String,
-	reason: String,
-) -> void:
-	_last_result = _failure(reason, false)
-
-
-func _apply_custom_resident_creator_route_affordances() -> void:
-	if not is_instance_valid(_custom_resident_creator_page):
-		return
-	var wardrobe_action := (
-		(_startup_ui_adapter.call(
-			"get_view_model",
-			"custom_resident_creator",
-		) as Dictionary).get("actions", {}) as Dictionary
-	).get("openWardrobe", {}) as Dictionary
-	var wardrobe_button := _custom_resident_creator_page.find_child(
-		"OpenWardrobeButton",
-		true,
-		false,
-	) as Button
-	if wardrobe_button == null:
-		return
-	if bool(wardrobe_action.get("enabled", false)):
-		wardrobe_button.tooltip_text = "打开完整衣柜"
-	else:
-		wardrobe_button.tooltip_text = String(
-			wardrobe_action.get(
-				"disabledReason",
-				"CUSTOM_RESIDENT_WARDROBE_ROUTE_UNAVAILABLE",
-			),
-		)
-
-
-func _complete_custom_resident_creation(
-	handoff: Dictionary,
-	generation: int,
-) -> void:
-	if generation != _flow_generation or _custom_resident_candidate_pool == null:
-		return
-	if int(handoff.get("candidatePoolRevision", -1)) != int(
-		_custom_resident_candidate_pool.candidate_pool_revision(),
-	):
-		_last_result = _failure("CUSTOM_RESIDENT_CANDIDATE_POOL_REVISION_STALE", false)
-		return
-	_apply_custom_candidate_pool_projection(handoff, true)
-	var focused_resident_id := String(handoff.get("focusedResidentId", ""))
-	if is_instance_valid(_custom_resident_creator_page):
-		_custom_resident_creator_page.tree_exited.connect(
-			Callable(
-				self,
-				"_restore_resident_selection_resident_focus",
-			).bind(focused_resident_id),
-			CONNECT_ONE_SHOT,
-		)
-	_close_custom_resident_creator(false)
-
-
-func _apply_custom_candidate_pool_projection(
-	handoff: Dictionary,
-	advance_revision: bool,
-) -> void:
-	if _custom_resident_candidate_pool == null or _resident_selection_vm.is_empty():
-		return
-	var merged := _merge_custom_candidate_projection(_resident_selection_vm)
-	if merged.is_empty():
-		return
-	_resident_selection_vm = merged
-	var data := _resident_selection_vm.get("data", {}) as Dictionary
-	var focused_id := String(handoff.get("focusedResidentId", ""))
-	if not focused_id.is_empty():
-		data["focused_resident_id"] = focused_id
-	_update_confirmation_payload(data)
-	if advance_revision:
-		_advance_resident_selection_revision()
-
-
-func _merge_custom_candidate_projection(view_model: Dictionary) -> Dictionary:
-	if _custom_resident_candidate_pool == null or view_model.is_empty():
-		return view_model
-	var projection := _custom_resident_candidate_pool.get_resident_selection_projection() as Dictionary
-	if not bool(projection.get("ok", false)):
-		_last_result = projection.duplicate(true)
-		return {}
-	var data := view_model.get("data", {}) as Dictionary
-	var catalog_entries: Array = []
-	for value: Variant in data.get("resident_catalog", []) as Array:
-		if value is Dictionary and String((value as Dictionary).get("source", "preset")) != "custom":
-			catalog_entries.append((value as Dictionary).duplicate(true))
-	catalog_entries.append_array(
-		(projection.get("catalogEntries", []) as Array).duplicate(true),
-	)
-	var selection_entries: Array = []
-	for value: Variant in data.get("residents", []) as Array:
-		if value is Dictionary and String((value as Dictionary).get("source", "preset")) != "custom":
-			selection_entries.append((value as Dictionary).duplicate(true))
-	selection_entries.append_array(
-		(projection.get("selectionEntries", []) as Array).duplicate(true),
-	)
-	data["resident_catalog"] = catalog_entries
-	data["residents"] = selection_entries
-	data["candidate_pool_revision"] = int(
-		projection.get("candidatePoolRevision", 0),
-	)
-	return view_model
-
-
-func _close_custom_resident_creator(restore_focus := true) -> bool:
-	if not is_instance_valid(_custom_resident_creator_page):
-		_custom_resident_creator_page = null
-		return false
-	var page := _custom_resident_creator_page
-	_custom_resident_creator_page = null
-	if page.has_method("unbind_town_ui_adapter"):
-		page.call("unbind_town_ui_adapter")
-	if restore_focus:
-		page.tree_exited.connect(
-			Callable(self, "_restore_resident_selection_focus"),
-			CONNECT_ONE_SHOT,
-		)
-	page.queue_free()
-	if _startup_ui_adapter != null:
-		_startup_ui_adapter.call("bind_custom_resident_creator_service", null)
-	_custom_resident_creator_service = null
-	if is_instance_valid(_resident_selection):
-		_resident_selection.set_process_unhandled_input(true)
-	return true
-
-
-func _reset_custom_resident_creator_session(clear_pool: bool) -> void:
-	if is_instance_valid(_custom_resident_creator_page):
-		_close_custom_resident_creator(false)
-	elif _startup_ui_adapter != null:
-		_startup_ui_adapter.call("bind_custom_resident_creator_service", null)
-	_custom_resident_creator_service = null
-	if clear_pool:
-		_custom_resident_candidate_pool = null
-
-
-func _reset_new_game_configuration_context() -> void:
-	_reset_custom_resident_creator_session(true)
-	_reset_resident_model_assignment_session()
-	# A new save slot starts with a fresh roster/exclusion draft. The custom
-	# resident pool is rebuilt from the retained global library when selection
-	# opens, so reusable definitions survive without leaking prior save state.
-	_resident_selection_vm.clear()
-
-
-func _restore_resident_selection_focus() -> void:
-	if not is_instance_valid(_resident_selection):
-		return
-	var custom_button := _resident_selection.find_child(
-		"CustomResidentButton",
-		true,
-		false,
-	) as Button
-	if custom_button != null and not custom_button.disabled:
-		custom_button.grab_focus()
-
-
-func _restore_resident_selection_resident_focus(resident_id: String) -> void:
-	if not is_instance_valid(_resident_selection) or resident_id.is_empty():
-		return
-	var data := _resident_selection_vm.get("data", {}) as Dictionary
-	var residents := data.get("residents", []) as Array
-	for index in residents.size():
-		var resident := residents[index] as Dictionary
-		if String(resident.get("resident_id", "")) != resident_id:
-			continue
-		var focus_button := _resident_selection.find_child(
-			"ResidentCardFocus%02d" % index,
-			true,
-			false,
-		) as Button
-		if focus_button != null and not focus_button.disabled:
-			focus_button.grab_focus()
-		return
-
-
-func _open_resident_model_assignment(draft: Dictionary) -> void:
-	if is_instance_valid(_resident_model_assignment_page):
-		return
-	var selection := get_tree().current_scene as Control
-	if selection == null or selection != _resident_selection:
-		_record_route_open_failure(
-			"RESIDENT_MODEL_ASSIGNMENT_ROUTE_HOST_UNAVAILABLE",
-			"居民模型分配页面暂时打不开，请稍后再试。",
-		)
-		return
-	var service_result := _configure_resident_model_assignment_service(draft)
-	if not bool(service_result.get("ok", false)):
-		var visible_result := service_result.duplicate(true)
-		visible_result["playerMessage"] = "居民模型分配页面暂时打不开，请稍后再试。"
-		_last_result = visible_result
-		selection.call("_show_notice", visible_result["playerMessage"])
-		return
-	var page := _instantiate_control_scene(RESIDENT_MODEL_ASSIGNMENT_SCENE_PATH)
-	if page == null:
-		_record_route_open_failure(
-			"RESIDENT_MODEL_ASSIGNMENT_ROUTE_FAILED",
-			"居民模型分配页面暂时打不开，请稍后再试。",
-		)
-		return
-	page.name = "ResidentModelAssignmentRoute"
-	page.process_mode = Node.PROCESS_MODE_ALWAYS
-	page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	page.z_index = 2300
-	page.call("bind_town_ui_adapter", _startup_ui_adapter)
-	_connect_once(
-		page,
-		"back_requested",
-		Callable(self, "_on_resident_model_assignment_back_requested"),
-	)
-	_connect_once(
-		page,
-		"intent_requested",
-		Callable(self, "_on_resident_model_assignment_intent_requested"),
-	)
-	_connect_once(
-		page,
-		"action_dispatch_started",
-		Callable(self, "_on_resident_model_assignment_action_dispatch_started"),
-	)
-	_resident_model_assignment_page = page
-	selection.set_process_unhandled_input(false)
-	selection.add_child(page)
-
-
-func _configure_resident_model_assignment_service(draft: Dictionary) -> Dictionary:
-	_detach_resident_model_assignment_service()
-	var catalog_result := _formal_new_game_catalog()
+	if selecti…3599 tokens truncated…log_result := _formal_new_game_catalog()
 	if not bool(catalog_result.get("ok", false)):
 		return catalog_result
 	var catalog := catalog_result.get("catalog", {}) as Dictionary
@@ -6208,6 +5788,28 @@ func _startup_catalog_snapshot() -> Dictionary:
 		"get_catalog",
 		FORMAL_SLOT_DEFINITIONS.duplicate(true),
 	) as Dictionary
+
+
+func _startup_new_game_catalog_snapshot() -> Dictionary:
+	var strict_catalog := _startup_catalog_snapshot()
+	if bool(strict_catalog.get("ok", false)):
+		return strict_catalog
+	# Interrupted-overwrite recovery protects existing saves, but an obsolete
+	# recovery marker must not block creation in another genuinely empty slot.
+	# Read the catalog without mutating or deleting the old archive; the catalog
+	# still refuses to call a damaged slot empty.
+	if _startup_save_catalog == null:
+		return strict_catalog
+	var isolated_catalog := _startup_save_catalog.call(
+		"get_catalog",
+		FORMAL_SLOT_DEFINITIONS.duplicate(true),
+	) as Dictionary
+	if not bool(isolated_catalog.get("ok", false)):
+		return strict_catalog
+	isolated_catalog["isolatedStartupErrorCode"] = String(
+		strict_catalog.get("errorCode", ""),
+	)
+	return isolated_catalog
 
 
 func _recover_interrupted_formal_overwrites() -> Dictionary:

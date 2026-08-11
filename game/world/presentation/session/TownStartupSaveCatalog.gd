@@ -143,9 +143,10 @@ func get_catalog(slot_definitions_value: Variant) -> Dictionary:
 		slots.append(slot)
 		slots_by_id[String(slot.get("slotId", ""))] = slot
 
-	var profile := _load_profile()
-	if profile.get("ok") != true:
-		return profile
+	# The profile only remembers convenience metadata (last-played slot and
+	# dismissed resident messages). An obsolete or damaged profile must never
+	# hide otherwise valid/empty save slots or block starting a new game.
+	var profile := _catalog_profile_or_empty(_load_profile())
 	var shown_messages := (
 		profile.get("shownResidentMessages", {}) as Dictionary
 	)
@@ -200,6 +201,19 @@ func get_catalog(slot_definitions_value: Variant) -> Dictionary:
 		),
 		"firstEmptySlotId": first_empty_slot_id,
 		"slotsFull": first_empty_slot_id.is_empty(),
+	}
+
+
+func _catalog_profile_or_empty(profile: Dictionary) -> Dictionary:
+	if profile.get("ok") == true:
+		return profile
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"lastPlayedSlotId": "",
+		"shownResidentMessages": {},
+		"recoveredProfileErrorCode": String(profile.get("errorCode", "")),
 	}
 
 

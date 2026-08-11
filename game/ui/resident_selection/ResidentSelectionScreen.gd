@@ -93,6 +93,11 @@ const TOUCH_TARGET_MIN := 48
 
 const DESKTOP_CANVAS := Vector2(1920.0, 1080.0)
 const STANDARD_CANVAS := Vector2(1280.0, 720.0)
+# The compact shell is authored on this artboard.  STANDARD controls must be
+# projected from these coordinates instead of using an unrelated 1280x720
+# layout; otherwise the shell scales correctly while every live control drifts
+# up and left (most visibly on Web's 1536x864 presentation).
+const COMPACT_ARTBOARD := Vector2(1672.0, 941.0)
 
 const COLOR_INK := Color("3f2818")
 const COLOR_MUTED := Color("76583d")
@@ -2612,21 +2617,59 @@ func _apply_header_layout() -> void:
 		_breadcrumb.visible = true
 	elif not mobile:
 		var canvas_width := _content_root.size.x
-		_set_rect(_town_clock, Rect2(canvas_width * 0.5 - 32, 8, 64, 64))
-		_set_rect(_back_button, Rect2(16, 10, 136, 74))
-		_set_rect(_back_text, Rect2(0, 4, 136, 66))
-		_set_rect(_title, Rect2(180, 8, canvas_width - 564, 74))
+		var compact_standard := _layout_mode == LayoutMode.STANDARD
+		_set_rect(
+			_town_clock,
+			_compact_rect(Rect2(788, 40, 96, 96))
+			if compact_standard
+			else Rect2(canvas_width * 0.5 - 32, 8, 64, 64)
+		)
+		_set_rect(
+			_back_button,
+			_compact_rect(Rect2(181, 136, 150, 72))
+			if compact_standard
+			else Rect2(16, 10, 136, 74)
+		)
+		_set_rect(_back_text, Rect2(Vector2.ZERO, _back_button.size))
+		_set_rect(
+			_title,
+			_compact_rect(Rect2(413, 134, 760, 82))
+			if compact_standard
+			else Rect2(180, 8, canvas_width - 564, 74)
+		)
 		_set_rect(_subtitle, Rect2())
-		_set_rect(_breadcrumb, Rect2())
-		_set_rect(_custom_button, Rect2(canvas_width - 384, 10, 164, 74))
-		_set_rect(_custom_delete_button, Rect2(canvas_width - 84, 18, 60, 58))
+		_set_rect(
+			_breadcrumb,
+			_compact_rect(Rect2(580, 238, 396, 40))
+			if compact_standard
+			else Rect2()
+		)
+		_set_rect(
+			_custom_button,
+			_compact_rect(Rect2(1198, 141, 147, 66))
+			if compact_standard
+			else Rect2(canvas_width - 384, 10, 164, 74)
+		)
+		_set_rect(
+			_custom_delete_button,
+			_compact_rect(Rect2(1490, 141, 58, 66))
+			if compact_standard
+			else Rect2(canvas_width - 84, 18, 60, 58)
+		)
 		_set_rect(_connection_box, Rect2(canvas_width - 236, 4, 220, 88))
-		_set_rect(_notice_label, Rect2(180, 84, canvas_width - 360, 128))
+		_set_rect(
+			_notice_label,
+			_compact_rect(Rect2(413, 214, 760, 62))
+			if compact_standard
+			else Rect2(180, 84, canvas_width - 360, 128)
+		)
 		_title.add_theme_font_size_override("font_size", FONT_BODY)
 		_back_text.add_theme_font_size_override("font_size", FONT_CAPTION)
 		_town_clock.visible = true
 		_notice_label.visible = not _notice_label.text.is_empty()
 		_subtitle.visible = false
+		# The compact shell keeps these step slots decorative.  Their desktop
+		# minimum widths are wider than the compact artboard and would overflow.
 		_breadcrumb.visible = false
 	else:
 		var canvas_width := _content_root.size.x
@@ -2684,10 +2727,11 @@ func _apply_body_layout() -> void:
 			card_size = Vector2(451, 164)
 			separation = Vector2i(18, 13)
 		LayoutMode.STANDARD:
-			_set_rect(_roster_scroll, Rect2(54, 100, 664, 516))
-			_set_rect(_detail_panel, Rect2(738, 100, 488, 516))
-			card_size = Vector2(160, 120)
-			separation = Vector2i(8, 12)
+			# Match the live controls to the slots painted in shell_v4.
+			_set_rect(_roster_scroll, _compact_rect(Rect2(201, 291, 734, 473)))
+			_set_rect(_detail_panel, _compact_rect(Rect2(998, 281, 480, 520)))
+			card_size = _compact_size(Vector2(171, 107))
+			separation = Vector2i(_compact_size(Vector2(15, 14)).round())
 		LayoutMode.TABLET:
 			var body_top := 100.0
 			var body_height := _content_root.size.y - 188.0
@@ -2798,22 +2842,28 @@ func _configure_grid(columns: int, card_size: Vector2, separation: Vector2i) -> 
 				_card_state_icons[index],
 				Rect2(1, 20, 26, 26) if _delete_mode_active else Rect2(-4, 0, 56, 56),
 			)
-			var portrait_height := card_size.y - 52.0
-			var portrait_width := minf(64.0, maxf(40.0, card_size.x * 0.34))
-			_set_rect(
-				_card_portraits[index],
-				Rect2(6, 4, portrait_width, portrait_height)
-			)
-			_set_rect(
-				_card_name_slots[index],
-				Rect2(8, card_size.y - 48.0, card_size.x - 16.0, 48)
-			)
+			if _layout_mode == LayoutMode.STANDARD:
+				_set_rect(_card_portraits[index], _compact_local_rect(Rect2(14, 9, 50, 82)))
+				_set_rect(_card_name_slots[index], _compact_local_rect(Rect2(62, 18, 82, 70)))
+				_set_rect(_card_state_icons[index], _compact_local_rect(Rect2(36, 7, 28, 28)))
+			else:
+				var portrait_height := card_size.y - 52.0
+				var portrait_width := minf(64.0, maxf(40.0, card_size.x * 0.34))
+				_set_rect(
+					_card_portraits[index],
+					Rect2(6, 4, portrait_width, portrait_height)
+				)
+				_set_rect(
+					_card_name_slots[index],
+					Rect2(8, card_size.y - 48.0, card_size.x - 16.0, 48)
+				)
 			_set_rect(_card_number_labels[index], Rect2())
 			_set_rect(_card_job_labels[index], Rect2())
 			_set_rect(_card_location_icons[index], Rect2())
 			_set_rect(_card_location_labels[index], Rect2())
 			_card_name_labels[index].add_theme_font_size_override(
-				"font_size", FONT_BODY
+				"font_size",
+				FONT_CARD_NAME if _layout_mode == LayoutMode.STANDARD else FONT_BODY
 			)
 			_card_name_labels[index].horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			_card_number_labels[index].visible = false
@@ -2862,6 +2912,34 @@ func _configure_detail_geometry() -> void:
 			)
 		_overview_scroll_content.custom_minimum_size = Vector2(
 			maxf(300.0, _overview_scroll.size.x - 34.0), 0.0
+		)
+		_refresh_overview_scroll_indicator.call_deferred()
+		return
+	if _layout_mode == LayoutMode.STANDARD:
+		_set_rect(_overview_shell_overlay, Rect2())
+		if _detail_mode == DetailMode.SHOWCASE:
+			_set_rect(_detail_name, _compact_local_rect(Rect2(46, 38, 385, 58)))
+			_set_rect(_detail_sprite, _compact_local_rect(Rect2(145, 104, 190, 260)))
+			_set_rect(_overview_button, _compact_local_rect(Rect2(29, 382, 422, 60)))
+			_center_button_icon_and_text(
+				_overview_button, _overview_icon, _overview_text, Vector2(40, 40), 6.0
+			)
+		else:
+			_layout_detail_identity_row(_compact_local_rect(Rect2(46, 32, 385, 64)))
+			_set_rect(_detail_location_icon, _compact_local_rect(Rect2(48, 112, 40, 40)))
+			_set_rect(_detail_location, _compact_local_rect(Rect2(92, 112, 330, 40)))
+			_set_rect(_overview_scroll, _compact_local_rect(Rect2(50, 168, 370, 248)))
+			_set_rect(_overview_scroll_track, _compact_local_rect(Rect2(430, 176, 12, 228)))
+		_set_rect(_detail_toggle_button, _compact_local_rect(Rect2(82, 459, 316, 51)))
+		_center_button_icon_and_text(
+			_detail_toggle_button,
+			_detail_toggle_icon,
+			_detail_toggle_text,
+			Vector2(36, 36),
+			6.0
+		)
+		_overview_scroll_content.custom_minimum_size = Vector2(
+			maxf(220.0, _overview_scroll.size.x - 30.0), 0.0
 		)
 		_refresh_overview_scroll_indicator.call_deferred()
 		return
@@ -2966,14 +3044,26 @@ func _apply_footer_layout() -> void:
 	elif not mobile:
 		_set_rect(
 			_footer,
-			Rect2(24, _content_root.size.y - 86, _content_root.size.x - 48, 74)
+			_compact_rect(Rect2(270, 815, 1125, 80))
+			if _layout_mode == LayoutMode.STANDARD
+			else Rect2(24, _content_root.size.y - 86, _content_root.size.x - 48, 74)
 		)
 		var footer_width := _footer.size.x
-		_set_rect(_count_label, Rect2(8, 5, 288, 64))
+		_set_rect(
+			_count_label,
+			_compact_local_rect(Rect2(0, 0, 360, 80))
+			if _layout_mode == LayoutMode.STANDARD
+			else Rect2(8, 5, 288, 64)
+		)
 		_count_label.add_theme_font_size_override("font_size", FONT_STATUS)
-		_set_rect(_recommended_button, Rect2(footer_width - 648, 5, 164, 64))
-		_set_rect(_clear_button, Rect2(footer_width - 472, 5, 120, 64))
-		_set_rect(_confirm_button, Rect2(footer_width - 340, 5, 332, 64))
+		if _layout_mode == LayoutMode.STANDARD:
+			_set_rect(_recommended_button, _compact_local_rect(Rect2(456, 0, 116, 80)))
+			_set_rect(_clear_button, _compact_local_rect(Rect2(582, 0, 118, 80)))
+			_set_rect(_confirm_button, _compact_local_rect(Rect2(780, 0, 345, 80)))
+		else:
+			_set_rect(_recommended_button, Rect2(footer_width - 648, 5, 164, 64))
+			_set_rect(_clear_button, Rect2(footer_width - 472, 5, 120, 64))
+			_set_rect(_confirm_button, Rect2(footer_width - 340, 5, 332, 64))
 		_set_rect(
 			_recommended_icon,
 			Rect2(23, 16, 32, 32) if _delete_mode_active else Rect2(13, 4, 56, 56),
@@ -3375,6 +3465,23 @@ func _load_texture(path: String) -> Texture2D:
 func _set_rect(control: Control, rect: Rect2) -> void:
 	control.position = rect.position.round()
 	control.size = rect.size.round()
+
+
+func _compact_size(native_size: Vector2) -> Vector2:
+	return Vector2(
+		native_size.x * _content_root.size.x / COMPACT_ARTBOARD.x,
+		native_size.y * _content_root.size.y / COMPACT_ARTBOARD.y,
+	)
+
+
+func _compact_rect(native_rect: Rect2) -> Rect2:
+	return Rect2(_compact_size(native_rect.position), _compact_size(native_rect.size))
+
+
+func _compact_local_rect(native_rect: Rect2) -> Rect2:
+	# Local geometry uses the same scale as the compact shell but intentionally
+	# does not include the shell slot's absolute origin.
+	return _compact_rect(native_rect)
 
 
 func _layout_detail_identity_row(row_rect: Rect2) -> void:

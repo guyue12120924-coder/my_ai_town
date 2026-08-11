@@ -214,6 +214,12 @@ func get_catalog(slot_definitions_value: Variant) -> Dictionary:
 func _can_isolate_unreadable_slot(failure: Dictionary) -> bool:
 	if bool(failure.get("retryable", false)):
 		return false
+	var meta_value: Variant = failure.get("meta", {})
+	if (
+		meta_value is Dictionary
+		and bool((meta_value as Dictionary).get("storeFailure", false))
+	):
+		return true
 	return String(failure.get("errorCode", "")) in [
 		"STARTUP_SAVE_STORE_RESPONSE_INVALID",
 		"SESSION_SAVE_JOURNAL_STATE_INVALID",

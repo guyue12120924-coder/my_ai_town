@@ -1644,7 +1644,7 @@ func _on_startup_intent_requested(intent: StringName, payload: Dictionary) -> vo
 				return
 			var route_payload := payload.duplicate(true)
 			if not _internal_playtest_enabled():
-				var catalog := _startup_catalog_snapshot()
+				var catalog := _startup_new_game_catalog_snapshot()
 				if not bool(catalog.get("ok", false)):
 					_publish_startup_action_failure(intent, catalog)
 					return
@@ -6208,6 +6208,28 @@ func _startup_catalog_snapshot() -> Dictionary:
 		"get_catalog",
 		FORMAL_SLOT_DEFINITIONS.duplicate(true),
 	) as Dictionary
+
+
+func _startup_new_game_catalog_snapshot() -> Dictionary:
+	var strict_catalog := _startup_catalog_snapshot()
+	if bool(strict_catalog.get("ok", false)):
+		return strict_catalog
+	# Interrupted-overwrite recovery protects existing saves, but an obsolete
+	# recovery marker must not block creation in another genuinely empty slot.
+	# Read the catalog without mutating or deleting the old archive; the catalog
+	# still refuses to call a damaged slot empty.
+	if _startup_save_catalog == null:
+		return strict_catalog
+	var isolated_catalog := _startup_save_catalog.call(
+		"get_catalog",
+		FORMAL_SLOT_DEFINITIONS.duplicate(true),
+	) as Dictionary
+	if not bool(isolated_catalog.get("ok", false)):
+		return strict_catalog
+	isolated_catalog["isolatedStartupErrorCode"] = String(
+		strict_catalog.get("errorCode", ""),
+	)
+	return isolated_catalog
 
 
 func _recover_interrupted_formal_overwrites() -> Dictionary:

@@ -1224,7 +1224,7 @@ func _host_failure_copy(result: Dictionary) -> String:
 			return "新游戏尚未准备好，请稍后重试。"
 	var player_reason := AiTownUiViewModel.player_reason(error_code).strip_edges()
 	if player_reason.is_empty() or player_reason == "当前操作暂不可用":
-		return "暂时无法开始新游戏，请重试。"
+		return "无法开始新游戏（%s）" % error_code
 	return player_reason
 
 

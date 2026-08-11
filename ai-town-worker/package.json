@@ -1,0 +1,5 @@
+{
+  "name": "my-ai-town-agent",
+  "private": true,
+  "description": "Cloudflare Worker runtime for AI Town. This package manifest enables Workers Build Cache to preserve npm's global cache, which also stores the cached Godot Web toolchain used by prepare-cloudflare.sh."
+}

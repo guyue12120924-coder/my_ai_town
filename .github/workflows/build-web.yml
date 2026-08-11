@@ -55,6 +55,7 @@ jobs:
               if git diff --name-only "$before" "$GITHUB_SHA" -- \
                 game \
                 ai-town-worker/build-web.sh \
+                ai-town-worker/patch-web-ui.py \
                 .github/workflows/build-web.yml \
                 | grep -q .; then
                 rebuild=true
@@ -74,9 +75,14 @@ jobs:
             ~/.local/share/godot/export_templates/4.7.stable
             game/.godot/imported
             game/.godot/uid_cache.bin
-          key: godot-web-4.7-${{ runner.os }}-${{ hashFiles('game/project.godot', 'game/export_presets.cfg', 'ai-town-worker/build-web.sh') }}
+          key: godot-web-4.7-${{ runner.os }}-${{ hashFiles('game/project.godot', 'game/export_presets.cfg', 'ai-town-worker/build-web.sh', 'ai-town-worker/patch-web-ui.py') }}
           restore-keys: |
             godot-web-4.7-${{ runner.os }}-
+
+      - name: Align Web UI visual and hit rectangles
+        if: steps.plan.outputs.rebuild == 'true'
+        shell: bash
+        run: python3 ai-town-worker/patch-web-ui.py
 
       - name: Build Cloudflare-ready Godot Web release
         if: steps.plan.outputs.rebuild == 'true'
@@ -94,7 +100,7 @@ jobs:
           test -f ai-town-worker/public/index.html
           echo "Reused existing web-dist assets; no Godot export was needed."
 
-      - name: Fix browser canvas coordinate mapping
+      - name: Validate browser canvas mapping
         shell: bash
         run: |
           python3 - <<'PY'
@@ -103,51 +109,10 @@ jobs:
           path = Path("ai-town-worker/public/index.html")
           html = path.read_text(encoding="utf-8")
 
-          forced_css = '''
-          html, body {
-          \twidth: 100%;
-          \theight: 100%;
-          }
-
-          #canvas {
-          \tposition: fixed;
-          \tinset: 0;
-          \twidth: 100vw !important;
-          \theight: 100vh !important;
-          \tmax-width: none !important;
-          \tmax-height: none !important;
-          \tpointer-events: auto !important;
-          }
-
-          #status {
-          \tpointer-events: none;
-          }
-          '''
-          safe_css = '''
-          #canvas {
-          \tpointer-events: auto !important;
-          }
-
-          #status {
-          \tpointer-events: none;
-          }
-          '''
-
-          if forced_css in html:
-              html = html.replace(forced_css, safe_css, 1)
-
-          html = html.replace(
-              "\\t\\t\\tfocusCanvas: true,\\n",
-              "\\t\\t\\tcanvas: canvas,\\n",
-              1,
-          )
-
           if "width: 100vw !important" in html or "height: 100vh !important" in html:
               raise SystemExit("Forced canvas CSS is still present")
           if "canvas: canvas" not in html:
               raise SystemExit("Godot engine is not bound to the visible canvas")
-
-          path.write_text(html, encoding="utf-8")
           PY
 
       - name: Validate Web assets
@@ -222,19 +187,3 @@ jobs:
           publish_dir: ./.web-dist
           force_orphan: true
           commit_message: "deploy: AI Town Web ${{ github.sha }}"
-
-      - name: Trigger fast production refresh
-        if: github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          printf '%s\n' "$GITHUB_SHA" > ai-town-worker/web-dist-source.txt
-          git add ai-town-worker/web-dist-source.txt
-          if git diff --cached --quiet; then
-            echo "Production refresh marker already current."
-          else
-            git commit -m "chore: refresh prebuilt web deployment"
-            git push origin HEAD:main
-          fi

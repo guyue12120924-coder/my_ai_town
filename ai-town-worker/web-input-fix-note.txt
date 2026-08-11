@@ -1,3 +1,4 @@
 web-input-mode=logical-css-pixels
 hidpi=false
 resizable=true
+stretch-mode=disabled

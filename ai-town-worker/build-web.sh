@@ -55,6 +55,10 @@ fi
 echo "Importing Godot resources..."
 "$GODOT_BIN" --headless --path "$GAME_DIR" --import
 
+echo "Validating responsive startup geometry..."
+"$GODOT_BIN" --headless --path "$GAME_DIR" \
+  --script res://ui/startup/tests/StartupResponsiveGeometryTest.gd
+
 echo "Exporting Web release..."
 "$GODOT_BIN" --headless --path "$GAME_DIR" --export-release "Web" "$OUT_DIR/index.html"
 

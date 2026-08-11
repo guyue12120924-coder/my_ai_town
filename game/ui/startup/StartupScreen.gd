@@ -404,14 +404,15 @@ func _sync_interface_theme() -> void:
 		),
 		0.5,
 	)
+	# The Theme's font, content margins and minimum sizes must use the same
+	# responsive scale as the final control rectangles. Otherwise Godot expands
+	# a visually scaled button back to the desktop minimum size, causing adjacent
+	# hit rectangles to overlap on browser viewports shorter than 1080 px.
+	var theme_scale := layout_scale
+	if not is_equal_approx(theme_scale, _interface_theme_scale):
+		theme = STARTUP_BUTTON_THEME.create(0.0, theme_scale)
+		_interface_theme_scale = theme_scale
 	_layout_interface_controls(viewport_size, layout_scale)
-	# Controls receive their final pixel rectangles directly below. Keeping scale
-	# at one makes the rendered rectangle and Godot's input rectangle identical.
-	var theme_scale := 1.0
-	if is_equal_approx(theme_scale, _interface_theme_scale):
-		return
-	theme = STARTUP_BUTTON_THEME.create(0.0, theme_scale)
-	_interface_theme_scale = theme_scale
 
 
 func _main_menu_rect(reference_rect: Rect2) -> Rect2:

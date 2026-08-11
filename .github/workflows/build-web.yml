@@ -111,6 +111,16 @@ jobs:
 
           if "width: 100vw !important" in html or "height: 100vh !important" in html:
               raise SystemExit("Forced canvas CSS is still present")
+          for forbidden in (
+              "syncCanvasOneToOne",
+              "canvas.width =",
+              "canvas.height =",
+              "canvasResizePolicy: 0",
+          ):
+              if forbidden in html:
+                  raise SystemExit(f"Unsafe manual canvas sizing found: {forbidden}")
+          if "canvasResizePolicy: 2" not in html:
+              raise SystemExit("Godot Adaptive canvas policy is not active")
           if "canvas: canvas" not in html:
               raise SystemExit("Godot engine is not bound to the visible canvas")
           PY
@@ -123,6 +133,7 @@ jobs:
           test -f ai-town-worker/public/index.js
           test -f ai-town-worker/public/index.wasm.parts.json
           test -f ai-town-worker/public/index.pck.parts.json
+          test -f ai-town-worker/public/build-commit.txt
           test ! -f ai-town-worker/public/index.wasm
           test ! -f ai-town-worker/public/index.pck
 

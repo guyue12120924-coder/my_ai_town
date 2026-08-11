@@ -140,11 +140,16 @@ import sys
 html_path = Path(sys.argv[1])
 html = html_path.read_text(encoding="utf-8")
 
-# Do not resize or reposition the canvas with CSS. Godot's Adaptive policy owns
-# both the backing-store size and the visible canvas geometry so pointer
-# coordinates and rendered controls stay in the same coordinate space.
+# Godot's Adaptive policy is the only owner of the canvas backing size and CSS
+# geometry. Never assign canvas.width/height from page JavaScript: doing so
+# bypasses Godot's resize notification and separates rendering from input.
 interaction_css = r'''
+html, body {
+	background: #152d25 !important;
+}
+
 #canvas {
+	background: #152d25 !important;
 	pointer-events: auto !important;
 }
 
@@ -261,6 +266,23 @@ patched, count = pattern.subn(replacement, html, count=1)
 if count != 1:
     raise SystemExit(f"Could not patch Godot startGame block; matches={count}")
 html_path.write_text(patched, encoding="utf-8")
+PY
+
+python3 - "$OUT_DIR/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+html = Path(sys.argv[1]).read_text(encoding="utf-8")
+for forbidden in (
+    "syncCanvasOneToOne",
+    "canvas.width =",
+    "canvas.height =",
+    "canvasResizePolicy: 0",
+):
+    if forbidden in html:
+        raise SystemExit(f"Unsafe manual canvas sizing found: {forbidden}")
+if "canvasResizePolicy: 2" not in html:
+    raise SystemExit("Godot Adaptive canvas policy is not active")
 PY
 
 # Keep generated deploy assets out of source-control oriented tooling.

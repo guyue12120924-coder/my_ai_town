@@ -405,9 +405,8 @@ func _sync_interface_theme() -> void:
 		0.5,
 	)
 	_layout_interface_controls(viewport_size, layout_scale)
-	# Window responsiveness is applied as one CanvasItem transform below. Keep
-	# the logical controls and theme at their approved size so Godot's minimum-size
-	# calculation cannot enlarge individual buttons and break their gaps.
+	# Controls receive their final pixel rectangles directly below. Keeping scale
+	# at one makes the rendered rectangle and Godot's input rectangle identical.
 	var theme_scale := 1.0
 	if is_equal_approx(theme_scale, _interface_theme_scale):
 		return
@@ -439,9 +438,9 @@ func _layout_interface_controls(
 			"startup_reference_rect",
 		) as Rect2
 		var visual_rect := _main_menu_rect(reference_rect)
+		control.scale = Vector2.ONE
 		control.position = canvas_offset + visual_rect.position * layout_scale
-		control.size = reference_rect.size
-		control.scale = Vector2.ONE * layout_scale * MAIN_MENU_SCALE
+		control.size = visual_rect.size * layout_scale
 
 
 func _wire_main_menu_focus_neighbors() -> void:

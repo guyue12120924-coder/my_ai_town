@@ -59,6 +59,10 @@ echo "Validating responsive startup geometry..."
 "$GODOT_BIN" --headless --path "$GAME_DIR" \
   --script res://ui/startup/tests/StartupResponsiveGeometryTest.gd
 
+echo "Validating browser-owned window geometry..."
+"$GODOT_BIN" --headless --path "$GAME_DIR" \
+  --script res://tests/web_window_geometry_guard_test.gd
+
 echo "Exporting Web release..."
 "$GODOT_BIN" --headless --path "$GAME_DIR" --export-release "Web" "$OUT_DIR/index.html"
 

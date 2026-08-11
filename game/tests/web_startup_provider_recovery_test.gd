@@ -41,6 +41,7 @@ func _initialize() -> void:
 func _run() -> void:
 	OS.set_environment("AI_TOWN_PROVIDER_TEST_NO_NETWORK", "1")
 	_test_worker_managed_provider_without_local_key()
+	_test_legacy_provider_selection_migrates_to_worker()
 	_test_invalid_profile_does_not_block_empty_slot()
 	_finish()
 
@@ -102,6 +103,37 @@ func _test_invalid_profile_does_not_block_empty_slot() -> void:
 	_expect(
 		String(result.get("firstEmptySlotId", "")) == "town-main",
 		"新游戏仍应获得空存档位：%s" % result,
+	)
+
+
+func _test_legacy_provider_selection_migrates_to_worker() -> void:
+	var legacy_path := "user://tests/web_provider_recovery/legacy-provider.json"
+	var store: RefCounted = PROVIDER_CONFIG_STORE.new()
+	_expect_ok(store.call("configure", legacy_path), "配置旧 Provider 测试存储")
+	_expect_ok(store.call("save_config", {
+		"schemaVersion": 1,
+		"selectedProviderId": "alibaba-bailian",
+		"selectedModelByProvider": {
+			"alibaba-bailian": "qwen3.5-plus",
+		},
+		"providers": {
+			"alibaba-bailian": {"enabled": true, "endpoint": ""},
+		},
+	}), "保存旧 Provider 配置")
+	var settings: RefCounted = PROVIDER_SETTINGS_SERVICE.new()
+	_expect_ok(settings.call("configure_store", legacy_path), "加载旧 Provider 配置")
+	_expect_ok(settings.call(
+		"_merge_web_worker_defaults",
+		"https://town.example/api/agent",
+	), "迁移旧 Provider 配置")
+	var runtime := settings.call("load_saved_runtime_configuration") as Dictionary
+	_expect(
+		String(runtime.get("providerId", "")) == "openai-compatible",
+		"无可用凭据的旧选择应自动切换到硅基流动 Worker",
+	)
+	_expect(
+		String(runtime.get("modelId", "")) == "ai-town-worker-default",
+		"迁移后应自动选择硅基流动默认模型",
 	)
 
 

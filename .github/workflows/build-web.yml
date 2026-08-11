@@ -133,6 +133,7 @@ jobs:
           test -f ai-town-worker/public/index.js
           test -f ai-town-worker/public/index.wasm.parts.json
           test -f ai-town-worker/public/index.pck.parts.json
+          test -f ai-town-worker/public/build-commit.txt
           test ! -f ai-town-worker/public/index.wasm
           test ! -f ai-town-worker/public/index.pck
 

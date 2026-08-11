@@ -63,6 +63,10 @@ echo "Validating browser-owned window geometry..."
 "$GODOT_BIN" --headless --path "$GAME_DIR" \
   --script res://tests/web_window_geometry_guard_test.gd
 
+echo "Validating Web startup and Provider recovery..."
+"$GODOT_BIN" --headless --path "$GAME_DIR" \
+  --script res://tests/web_startup_provider_recovery_test.gd
+
 echo "Exporting Web release..."
 "$GODOT_BIN" --headless --path "$GAME_DIR" --export-release "Web" "$OUT_DIR/index.html"
 

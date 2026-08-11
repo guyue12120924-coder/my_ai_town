@@ -5,7 +5,7 @@ keep_vars = true
 workers_dev = true
 
 [build]
-command = "bash ./build-web.sh"
+command = "bash ./prepare-cloudflare.sh"
 
 [assets]
 directory = "./public"

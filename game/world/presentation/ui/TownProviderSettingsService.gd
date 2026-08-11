@@ -20,6 +20,9 @@ const REQUIRED_PROVIDER_METHODS: Array[String] = [
 ]
 const HOST_ROUTING_REQUIRED := "PROVIDER_SETTINGS_HOST_ROUTING_REQUIRED"
 const TEST_NO_NETWORK_ENV := "AI_TOWN_PROVIDER_TEST_NO_NETWORK"
+const WEB_WORKER_PROVIDER_ID := "openai-compatible"
+const WEB_WORKER_MODEL_ID := "ai-town-worker-default"
+const WEB_WORKER_API_PATH := "/api/agent"
 const PROVIDER_DISPLAY_NAMES := {
 	"deepseek": "DeepSeek",
 	"kimi": "Kimi",
@@ -153,6 +156,10 @@ func runtime_configuration() -> Dictionary:
 		break
 	var ready := provider_ready and not provider_id.is_empty() and not model_id.is_empty()
 	var has_saved_key := _has_saved_key(provider_id)
+	var has_usable_credential := _has_usable_credential(
+		provider_id,
+		provider_config,
+	)
 	var error_code := ""
 	if not ready:
 		error_code = (
@@ -163,7 +170,7 @@ func runtime_configuration() -> Dictionary:
 			else "PROVIDER_DISABLED"
 			if not bool(provider_config.get("enabled", true))
 			else "PROVIDER_API_KEY_REQUIRED"
-			if not has_saved_key
+			if not has_usable_credential
 			else provider_error_code
 			if not provider_error_code.is_empty()
 			else "PROVIDER_HEALTH_UNAVAILABLE"
@@ -176,6 +183,10 @@ func runtime_configuration() -> Dictionary:
 		"modelId": model_id,
 		"providerConfigs": _provider_configs_for_runtime(),
 		"hasSavedKey": has_saved_key,
+		"credentialManagedByWorker": _uses_worker_managed_credential(
+			provider_id,
+			provider_config,
+		),
 	}
 
 
@@ -434,6 +445,10 @@ func _load_public_snapshot() -> Dictionary:
 		var stored_provider := stored_providers.get(provider_id, {}) as Dictionary
 		var enabled := bool(stored_provider.get("enabled", true))
 		var has_saved_key := _has_saved_key(provider_id)
+		var worker_managed := _uses_worker_managed_credential(
+			provider_id,
+			stored_provider,
+		)
 		var selected_models := _stored_config.get("selectedModelByProvider", {}) as Dictionary
 		var selected_model_id := String(
 			selected_models.get(provider_id, "")
@@ -443,7 +458,7 @@ func _load_public_snapshot() -> Dictionary:
 			projected_source["status"] = "disabled"
 			projected_source["errorCode"] = "PROVIDER_DISABLED"
 			projected_source["retryable"] = false
-		elif not has_saved_key:
+		elif not has_saved_key and not worker_managed:
 			projected_source["status"] = "not_configured"
 			projected_source["errorCode"] = "PROVIDER_API_KEY_REQUIRED"
 			projected_source["retryable"] = false
@@ -468,11 +483,17 @@ func _load_public_snapshot() -> Dictionary:
 			"external": bool(source.get("external", false)),
 			"key": {
 				"saved": has_saved_key,
-				"maskedValue": _masked_key(
-					String(_credential_keys.get(provider_id, ""))
+				"maskedValue": (
+					"由小镇服务器托管"
+					if worker_managed
+					else _masked_key(String(_credential_keys.get(provider_id, "")))
 				),
-				"status": "saved" if has_saved_key else "missing",
-				"errorCode": "" if has_saved_key else "PROVIDER_API_KEY_REQUIRED",
+				"status": (
+					"managed" if worker_managed else "saved" if has_saved_key else "missing"
+				),
+				"errorCode": (
+					"" if has_saved_key or worker_managed else "PROVIDER_API_KEY_REQUIRED"
+				),
 			},
 			"baseUrl": String(stored_provider.get("endpoint", "")),
 			"models": (
@@ -807,7 +828,7 @@ func _check_connection(payload: Dictionary, request_id: String) -> Dictionary:
 	var stored_provider := stored_providers.get(provider_id, {}) as Dictionary
 	if not bool(stored_provider.get("enabled", true)):
 		return _failure("PROVIDER_DISABLED", false)
-	if not _has_saved_key(provider_id):
+	if not _has_usable_credential(provider_id, stored_provider):
 		return _failure("PROVIDER_API_KEY_REQUIRED", false)
 	return _start_health_request(
 		[{"providerId": provider_id, "modelId": model_id}],
@@ -839,7 +860,7 @@ func _start_configured_health_check() -> Dictionary:
 			provider_id.is_empty()
 			or model_id.is_empty()
 			or not bool(provider_config.get("enabled", true))
-			or not _has_saved_key(provider_id)
+			or not _has_usable_credential(provider_id, provider_config)
 		):
 			continue
 		targets.append({"providerId": provider_id, "modelId": model_id})
@@ -941,8 +962,22 @@ func _on_health_request_completed(
 func _load_stored_config() -> Dictionary:
 	var loaded := _store.call("load_config") as Dictionary
 	if not bool(loaded.get("ok", false)):
-		return loaded
-	_stored_config = (loaded.get("config", {}) as Dictionary).duplicate(true)
+		if not OS.has_feature("web") or String(loaded.get("errorCode", "")) not in [
+			"PROVIDER_CONFIG_INVALID",
+			"PROVIDER_CONFIG_SCHEMA_UNSUPPORTED",
+			"PROVIDER_CONFIG_PLAINTEXT_CREDENTIAL_FORBIDDEN",
+		]:
+			return loaded
+		# Provider preferences are recoverable metadata. Keep credentials in their
+		# separate store and rebuild an obsolete browser config from safe defaults.
+		_stored_config = {
+			"schemaVersion": 1,
+			"selectedProviderId": "",
+			"selectedModelByProvider": {},
+			"providers": {},
+		}
+	else:
+		_stored_config = (loaded.get("config", {}) as Dictionary).duplicate(true)
 	if not _stored_config.has("selectedProviderId"):
 		_stored_config["selectedProviderId"] = ""
 	if not _stored_config.get("selectedModelByProvider", {}) is Dictionary:
@@ -960,8 +995,52 @@ func _load_stored_config() -> Dictionary:
 	var migration_result := _migrate_plaintext_credentials()
 	if not bool(migration_result.get("ok", false)):
 		return migration_result
+	var seeded := _seed_web_worker_defaults_if_empty()
+	if not bool(seeded.get("ok", false)):
+		return seeded
 	_selected_provider_id = String(_stored_config.get("selectedProviderId", ""))
 	return {"ok": true, "errorCode": "", "retryable": false}
+
+
+func _seed_web_worker_defaults_if_empty() -> Dictionary:
+	if not OS.has_feature("web"):
+		return _success()
+	if (
+		not String(_stored_config.get("selectedProviderId", "")).is_empty()
+		or not (_stored_config.get("selectedModelByProvider", {}) as Dictionary).is_empty()
+		or not (_stored_config.get("providers", {}) as Dictionary).is_empty()
+	):
+		return _success()
+	var endpoint := _web_worker_endpoint()
+	if endpoint.is_empty():
+		return _failure("PROVIDER_BASE_URL_INVALID", false)
+	_stored_config = {
+		"schemaVersion": 1,
+		"selectedProviderId": WEB_WORKER_PROVIDER_ID,
+		"selectedModelByProvider": {
+			WEB_WORKER_PROVIDER_ID: WEB_WORKER_MODEL_ID,
+		},
+		"providers": {
+			WEB_WORKER_PROVIDER_ID: {
+				"enabled": true,
+				"endpoint": endpoint,
+			},
+		},
+	}
+	var persisted := _store.call("save_config", _stored_config) as Dictionary
+	# The in-memory same-origin default is sufficient for this run. A browser
+	# storage write failure must not collapse the Provider catalog back to empty.
+	return persisted if bool(persisted.get("ok", false)) else _success()
+
+
+func _web_worker_endpoint() -> String:
+	if not ClassDB.class_exists("JavaScriptBridge"):
+		return ""
+	var origin_value: Variant = JavaScriptBridge.eval("window.location.origin")
+	if typeof(origin_value) != TYPE_STRING:
+		return ""
+	var origin := (origin_value as String).strip_edges().trim_suffix("/")
+	return "%s%s" % [origin, WEB_WORKER_API_PATH] if origin.begins_with("https://") else ""
 
 
 func _persist_candidate_and_reconfigure(candidate: Dictionary) -> Dictionary:
@@ -1091,6 +1170,26 @@ func _migrate_plaintext_credentials() -> Dictionary:
 
 func _has_saved_key(provider_id: String) -> bool:
 	return not String(_credential_keys.get(provider_id, "")).strip_edges().is_empty()
+
+
+func _has_usable_credential(
+	provider_id: String,
+	provider_config: Dictionary,
+) -> bool:
+	return (
+		_has_saved_key(provider_id)
+		or _uses_worker_managed_credential(provider_id, provider_config)
+	)
+
+
+func _uses_worker_managed_credential(
+	provider_id: String,
+	provider_config: Dictionary,
+) -> bool:
+	if provider_id != WEB_WORKER_PROVIDER_ID:
+		return false
+	var endpoint := String(provider_config.get("endpoint", "")).strip_edges()
+	return endpoint.trim_suffix("/").ends_with(WEB_WORKER_API_PATH)
 
 
 func _masked_key(api_key: String) -> String:

@@ -131,6 +131,93 @@ PY
 chunk_large_asset "$OUT_DIR/index.wasm" "application/wasm"
 chunk_large_asset "$OUT_DIR/index.pck" "application/octet-stream"
 
+echo "Patching Godot HTML to preload the main PCK from static chunks..."
+python3 - "$OUT_DIR/index.html" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+html_path = Path(sys.argv[1])
+html = html_path.read_text(encoding="utf-8")
+pattern = re.compile(
+    r"\t\tsetStatusMode\('progress'\);\n"
+    r"\t\tengine\.startGame\(\{\n.*?\n"
+    r"\t\t\}\)\.then\(\(\) => \{\n"
+    r"\t\t\tsetStatusMode\('hidden'\);\n"
+    r"\t\t\}, displayFailureNotice\);",
+    re.S,
+)
+replacement = r'''\t\tsetStatusMode('progress');
+
+\t\tconst updateDownloadProgress = function (current, total) {
+\t\t\tif (current > 0 && total > 0) {
+\t\t\t\tstatusProgress.value = current;
+\t\t\t\tstatusProgress.max = total;
+\t\t\t} else {
+\t\t\t\tstatusProgress.removeAttribute('value');
+\t\t\t\tstatusProgress.removeAttribute('max');
+\t\t\t}
+\t\t};
+
+\t\tasync function loadChunkedMainPack() {
+\t\t\tconst manifestResponse = await fetch('index.pck.parts.json', { cache: 'no-store' });
+\t\t\tif (!manifestResponse.ok) {
+\t\t\t\tthrow new Error(`Failed to load PCK manifest: HTTP ${manifestResponse.status}`);
+\t\t\t}
+\t\t\tconst manifest = await manifestResponse.json();
+\t\t\tif (!manifest || manifest.contentEncoding !== 'identity' || !Array.isArray(manifest.parts) || manifest.parts.length === 0) {
+\t\t\t\tthrow new Error('Invalid raw PCK chunk manifest.');
+\t\t\t}
+
+\t\t\tconst total = Number(manifest.originalSize || manifest.encodedSize || 0);
+\t\t\tif (!Number.isSafeInteger(total) || total <= 0) {
+\t\t\t\tthrow new Error('Invalid PCK size in manifest.');
+\t\t\t}
+
+\t\t\tconst merged = new Uint8Array(total);
+\t\t\tlet offset = 0;
+\t\t\tfor (const part of manifest.parts) {
+\t\t\t\tif (!/^[A-Za-z0-9._-]+$/.test(String(part))) {
+\t\t\t\t\tthrow new Error(`Invalid PCK chunk name: ${part}`);
+\t\t\t\t}
+\t\t\t\tconst response = await fetch(String(part), { cache: 'no-store' });
+\t\t\t\tif (!response.ok) {
+\t\t\t\t\tthrow new Error(`Failed to load PCK chunk ${part}: HTTP ${response.status}`);
+\t\t\t\t}
+\t\t\t\tconst bytes = new Uint8Array(await response.arrayBuffer());
+\t\t\t\tif (offset + bytes.byteLength > merged.byteLength) {
+\t\t\t\t\tthrow new Error(`PCK chunk overflow at ${part}`);
+\t\t\t\t}
+\t\t\t\tmerged.set(bytes, offset);
+\t\t\t\toffset += bytes.byteLength;
+\t\t\t\tupdateDownloadProgress(offset, total);
+\t\t\t}
+
+\t\t\tif (offset !== total) {
+\t\t\t\tthrow new Error(`PCK size mismatch: expected ${total}, received ${offset}`);
+\t\t\t}
+\t\t\tif (merged[0] !== 0x47 || merged[1] !== 0x44 || merged[2] !== 0x50 || merged[3] !== 0x43) {
+\t\t\t\tthrow new Error(`Invalid PCK header: ${Array.from(merged.slice(0, 4)).map((v) => v.toString(16).padStart(2, '0')).join(' ')}`);
+\t\t\t}
+\t\t\treturn merged.buffer;
+\t\t}
+
+\t\tPromise.all([
+\t\t\tengine.init('index'),
+\t\t\tloadChunkedMainPack().then((buffer) => engine.preloadFile(buffer, 'index.pck')),
+\t\t]).then(() => engine.start({
+\t\t\targs: ['--main-pack', 'index.pck'],
+\t\t\t'onProgress': updateDownloadProgress,
+\t\t})).then(() => {
+\t\t\tsetStatusMode('hidden');
+\t\t}, displayFailureNotice);'''
+
+patched, count = pattern.subn(replacement, html, count=1)
+if count != 1:
+    raise SystemExit(f"Could not patch Godot startGame block; matches={count}")
+html_path.write_text(patched, encoding="utf-8")
+PY
+
 # Keep generated deploy assets out of source-control oriented tooling.
 printf '%s\n' "${GITHUB_SHA:-unknown}" > "$OUT_DIR/build-commit.txt"
 

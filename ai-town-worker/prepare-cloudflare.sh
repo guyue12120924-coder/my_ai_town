@@ -11,7 +11,12 @@ validate_dist() {
   test -f "$OUT_DIR/index.html" \
     && test -f "$OUT_DIR/index.js" \
     && test -f "$OUT_DIR/index.wasm.parts.json" \
-    && test -f "$OUT_DIR/index.pck.parts.json"
+    && test -f "$OUT_DIR/index.pck.parts.json" \
+    && test -f "$OUT_DIR/build-commit.txt" \
+    && {
+      [[ -z "${WORKERS_CI_COMMIT_SHA:-}" ]] \
+        || [[ "$(tr -d '\r\n' < "$OUT_DIR/build-commit.txt")" == "${WORKERS_CI_COMMIT_SHA}" ]]
+    }
 }
 
 if [[ "${WORKERS_CI:-0}" == "1" ]]; then
@@ -30,14 +35,14 @@ if [[ "${WORKERS_CI:-0}" == "1" ]]; then
         mkdir -p "$OUT_DIR"
         cp -a "$DIST_PUBLIC/." "$OUT_DIR/"
         if validate_dist; then
-          echo "Using prebuilt web-dist assets. Godot export skipped."
+          echo "Using prebuilt web-dist assets for the exact source commit. Godot export skipped."
           exit 0
         fi
       fi
     fi
   fi
 
-  echo "No usable web-dist yet; preparing cached full Godot export."
+  echo "No web-dist for this exact commit; preparing cached full Godot export."
 
   # Workers Build Cache persists npm's global cache. Keep the heavy Godot
   # toolchain and imported project cache under ~/.npm, then link the locations

@@ -1423,7 +1423,12 @@ func _build_key_section(provider: Dictionary) -> Control:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 8)
 	panel.add_child(column)
-	column.add_child(_section_heading("API Key", "仅保存在本机"))
+	var key_data := provider.get("key", {}) as Dictionary
+	var worker_managed := String(key_data.get("status", "")) == "managed"
+	column.add_child(_section_heading(
+		"API Key",
+		"由小镇服务器安全托管" if worker_managed else "仅保存在本机",
+	))
 
 	var form: Container
 	if _layout_profile == "desktop_wide":
@@ -1433,16 +1438,18 @@ func _build_key_section(provider: Dictionary) -> Control:
 	form.add_theme_constant_override("separation", 8)
 	column.add_child(form)
 
-	var key_data := provider.get("key", {}) as Dictionary
 	_key_edit = LineEdit.new()
 	_key_edit.name = "ApiKeyInput"
 	_key_edit.secret = not _show_key
 	_key_edit.secret_character = "•"
 	_key_edit.placeholder_text = (
-		"已安全保存，输入新 Key 可替换"
+		"无需填写，已由小镇服务器托管"
+		if worker_managed
+		else "已安全保存，输入新 Key 可替换"
 		if bool(key_data.get("saved", false))
 		else "请输入 API Key"
 	)
+	_key_edit.editable = not worker_managed
 	_key_edit.text = _draft_key
 	_key_edit.custom_minimum_size = Vector2(
 		220 if _is_phone_profile() else 320,
@@ -1490,7 +1497,8 @@ func _build_key_section(provider: Dictionary) -> Control:
 	reveal.name = "RevealKeyButton"
 	reveal.set_meta("gate_id", "key_reveal")
 	reveal.disabled = (
-		_draft_key.is_empty()
+		worker_managed
+		or _draft_key.is_empty()
 		and not bool(key_data.get("saved", false))
 	)
 	reveal.pressed.connect(func() -> void:
@@ -1508,6 +1516,8 @@ func _build_key_section(provider: Dictionary) -> Control:
 	_save_key_button.name = "SaveKeyButton"
 	_save_key_button.set_meta("gate_id", "key_save")
 	_sync_key_save_enabled()
+	if worker_managed:
+		_save_key_button.disabled = true
 	_save_key_button.pressed.connect(func() -> void:
 		var submitted_key := _draft_key
 		_dispatch_intent(
@@ -1529,7 +1539,8 @@ func _build_key_section(provider: Dictionary) -> Control:
 	delete.name = "DeleteKeyButton"
 	delete.set_meta("gate_id", "key_delete")
 	delete.disabled = (
-		not _action_enabled("deleteKey")
+		worker_managed
+		or not _action_enabled("deleteKey")
 		or not bool(key_data.get("saved", false))
 		or _operation_loading()
 	)
@@ -1544,6 +1555,9 @@ func _build_key_section(provider: Dictionary) -> Control:
 
 
 func _build_base_url_section(provider: Dictionary) -> Control:
+	var worker_managed := String(
+		(provider.get("key", {}) as Dictionary).get("status", ""),
+	) == "managed"
 	var panel := PanelContainer.new()
 	panel.name = "BaseUrlPanel"
 	panel.add_theme_stylebox_override(
@@ -1555,7 +1569,10 @@ func _build_base_url_section(provider: Dictionary) -> Control:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 8)
 	panel.add_child(column)
-	column.add_child(_section_heading("Base URL", "留空使用官方地址"))
+	column.add_child(_section_heading(
+		"Base URL",
+		"由游戏自动配置" if worker_managed else "留空使用官方地址",
+	))
 	var row: Container
 	if _is_phone_profile():
 		row = VBoxContainer.new()
@@ -1567,6 +1584,7 @@ func _build_base_url_section(provider: Dictionary) -> Control:
 	_base_url_edit.name = "BaseUrlInput"
 	_base_url_edit.text = _draft_base_url
 	_base_url_edit.placeholder_text = "留空使用官方默认地址"
+	_base_url_edit.editable = not worker_managed
 	_base_url_edit.custom_minimum_size = Vector2(
 		220 if _is_phone_profile() else 320,
 		_field_height()
@@ -1604,7 +1622,8 @@ func _build_base_url_section(provider: Dictionary) -> Control:
 	save.name = "SaveBaseUrlButton"
 	save.set_meta("gate_id", "base_url_save")
 	save.disabled = (
-		not _action_enabled("saveBaseUrl")
+		worker_managed
+		or not _action_enabled("saveBaseUrl")
 		or _operation_loading()
 	)
 	save.pressed.connect(func() -> void:

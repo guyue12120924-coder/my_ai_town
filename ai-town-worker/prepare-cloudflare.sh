@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="$SCRIPT_DIR/public"
 TMP_DIR="${TMPDIR:-/tmp}/ai-town-web-dist"
 DIST_URL="https://codeload.github.com/guyue12120924-coder/my_ai_town/tar.gz/refs/heads/web-dist"
@@ -36,7 +37,32 @@ if [[ "${WORKERS_CI:-0}" == "1" ]]; then
     fi
   fi
 
-  echo "No usable web-dist yet; falling back to one full Godot export."
+  echo "No usable web-dist yet; preparing cached full Godot export."
+
+  # Workers Build Cache persists npm's global cache. Keep the heavy Godot
+  # toolchain and imported project cache under ~/.npm, then link the locations
+  # expected by build-web.sh into that persistent cache.
+  CACHE_ROOT="$HOME/.npm/ai-town-web-cache"
+  mkdir -p \
+    "$CACHE_ROOT/godot" \
+    "$CACHE_ROOT/templates/4.7.stable" \
+    "$CACHE_ROOT/game-dot-godot"
+
+  mkdir -p "$HOME/.cache"
+  rm -rf "$HOME/.cache/ai-town-godot"
+  ln -s "$CACHE_ROOT/godot" "$HOME/.cache/ai-town-godot"
+
+  TEMPLATE_PARENT="$HOME/.local/share/godot/export_templates"
+  mkdir -p "$TEMPLATE_PARENT"
+  rm -rf "$TEMPLATE_PARENT/4.7.stable"
+  ln -s "$CACHE_ROOT/templates/4.7.stable" "$TEMPLATE_PARENT/4.7.stable"
+
+  rm -rf "$REPO_ROOT/game/.godot"
+  ln -s "$CACHE_ROOT/game-dot-godot" "$REPO_ROOT/game/.godot"
 fi
+
+# Web-only UI layout patch. Avoid Control.scale transforms so rendered buttons
+# and their mouse hit rectangles use exactly the same final coordinates.
+python3 "$SCRIPT_DIR/patch-web-ui.py"
 
 exec bash "$SCRIPT_DIR/build-web.sh"

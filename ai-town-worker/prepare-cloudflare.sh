@@ -8,14 +8,18 @@ TMP_DIR="${TMPDIR:-/tmp}/ai-town-web-dist"
 DIST_URL="https://codeload.github.com/guyue12120924-coder/my_ai_town/tar.gz/refs/heads/web-dist"
 
 validate_dist() {
+  local expected_commit="${WORKERS_CI_COMMIT_SHA:-}"
+  if [[ -f "$SCRIPT_DIR/web-dist-source.txt" ]]; then
+    expected_commit="$(tr -d '\r\n' < "$SCRIPT_DIR/web-dist-source.txt")"
+  fi
   test -f "$OUT_DIR/index.html" \
     && test -f "$OUT_DIR/index.js" \
     && test -f "$OUT_DIR/index.wasm.parts.json" \
     && test -f "$OUT_DIR/index.pck.parts.json" \
     && test -f "$OUT_DIR/build-commit.txt" \
     && {
-      [[ -z "${WORKERS_CI_COMMIT_SHA:-}" ]] \
-        || [[ "$(tr -d '\r\n' < "$OUT_DIR/build-commit.txt")" == "${WORKERS_CI_COMMIT_SHA}" ]]
+      [[ -z "$expected_commit" ]] \
+        || [[ "$(tr -d '\r\n' < "$OUT_DIR/build-commit.txt")" == "$expected_commit" ]]
     }
 }
 

@@ -475,10 +475,14 @@ func _load_public_snapshot() -> Dictionary:
 			available_count += 1
 		providers.append({
 			"providerId": provider_id,
-			"displayName": String(PROVIDER_DISPLAY_NAMES.get(
-				provider_id,
-				source.get("label", provider_id),
-			)),
+			"displayName": (
+				"硅基流动（小镇托管）"
+				if worker_managed
+				else String(PROVIDER_DISPLAY_NAMES.get(
+					provider_id,
+					source.get("label", provider_id),
+				))
+			),
 			"enabled": enabled,
 			"external": bool(source.get("external", false)),
 			"key": {
@@ -502,7 +506,13 @@ func _load_public_snapshot() -> Dictionary:
 			"connection": _connection_projection(projected_source),
 		})
 	providers.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
-		return String(left.get("providerId", "")) < String(right.get("providerId", ""))
+		var left_id := String(left.get("providerId", ""))
+		var right_id := String(right.get("providerId", ""))
+		if left_id == WEB_WORKER_PROVIDER_ID:
+			return true
+		if right_id == WEB_WORKER_PROVIDER_ID:
+			return false
+		return left_id < right_id
 	)
 	var available_ids: Array[String] = []
 	for provider in providers:
@@ -995,38 +1005,60 @@ func _load_stored_config() -> Dictionary:
 	var migration_result := _migrate_plaintext_credentials()
 	if not bool(migration_result.get("ok", false)):
 		return migration_result
-	var seeded := _seed_web_worker_defaults_if_empty()
+	var seeded := _ensure_web_worker_defaults()
 	if not bool(seeded.get("ok", false)):
 		return seeded
 	_selected_provider_id = String(_stored_config.get("selectedProviderId", ""))
 	return {"ok": true, "errorCode": "", "retryable": false}
 
 
-func _seed_web_worker_defaults_if_empty() -> Dictionary:
+func _ensure_web_worker_defaults() -> Dictionary:
 	if not OS.has_feature("web"):
-		return _success()
-	if (
-		not String(_stored_config.get("selectedProviderId", "")).is_empty()
-		or not (_stored_config.get("selectedModelByProvider", {}) as Dictionary).is_empty()
-		or not (_stored_config.get("providers", {}) as Dictionary).is_empty()
-	):
 		return _success()
 	var endpoint := _web_worker_endpoint()
 	if endpoint.is_empty():
 		return _failure("PROVIDER_BASE_URL_INVALID", false)
-	_stored_config = {
-		"schemaVersion": 1,
-		"selectedProviderId": WEB_WORKER_PROVIDER_ID,
-		"selectedModelByProvider": {
-			WEB_WORKER_PROVIDER_ID: WEB_WORKER_MODEL_ID,
-		},
-		"providers": {
-			WEB_WORKER_PROVIDER_ID: {
-				"enabled": true,
-				"endpoint": endpoint,
-			},
-		},
-	}
+	return _merge_web_worker_defaults(endpoint)
+
+
+func _merge_web_worker_defaults(endpoint: String) -> Dictionary:
+	if endpoint.is_empty():
+		return _failure("PROVIDER_BASE_URL_INVALID", false)
+	var providers := (
+		_stored_config.get("providers", {}) as Dictionary
+	).duplicate(true)
+	var worker_config := (
+		providers.get(WEB_WORKER_PROVIDER_ID, {}) as Dictionary
+	).duplicate(true)
+	var existing_endpoint := String(worker_config.get("endpoint", "")).strip_edges()
+	# Preserve a deliberately configured OpenAI-compatible endpoint. Empty and
+	# previously managed entries are safe to migrate to the same-origin Worker.
+	if (
+		not existing_endpoint.is_empty()
+		and not existing_endpoint.trim_suffix("/").ends_with(WEB_WORKER_API_PATH)
+	):
+		return _success()
+	worker_config["enabled"] = true
+	worker_config["endpoint"] = endpoint
+	providers[WEB_WORKER_PROVIDER_ID] = worker_config
+	var selected_models := (
+		_stored_config.get("selectedModelByProvider", {}) as Dictionary
+	).duplicate(true)
+	if String(selected_models.get(WEB_WORKER_PROVIDER_ID, "")).is_empty():
+		selected_models[WEB_WORKER_PROVIDER_ID] = WEB_WORKER_MODEL_ID
+	var selected_provider := String(
+		_stored_config.get("selectedProviderId", ""),
+	).strip_edges()
+	var selected_config := providers.get(selected_provider, {}) as Dictionary
+	if (
+		selected_provider.is_empty()
+		or not _has_usable_credential(selected_provider, selected_config)
+	):
+		selected_provider = WEB_WORKER_PROVIDER_ID
+	_stored_config["schemaVersion"] = 1
+	_stored_config["selectedProviderId"] = selected_provider
+	_stored_config["selectedModelByProvider"] = selected_models
+	_stored_config["providers"] = providers
 	var persisted := _store.call("save_config", _stored_config) as Dictionary
 	# The in-memory same-origin default is sufficient for this run. A browser
 	# storage write failure must not collapse the Provider catalog back to empty.

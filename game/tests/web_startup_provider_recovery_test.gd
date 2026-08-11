@@ -30,6 +30,19 @@ class EmptySaveStore:
 		return {"ok": false, "errorCode": "SESSION_SAVE_REFERENCE_NOT_FOUND"}
 
 
+class LegacyBrokenSaveStore:
+	extends EmptySaveStore
+
+	func list_incomplete(slot_id: String) -> Dictionary:
+		if slot_id == "town-main":
+			return {
+				"ok": false,
+				"errorCode": "SESSION_SAVE_JOURNAL_STATE_INVALID",
+				"retryable": false,
+			}
+		return super.list_incomplete(slot_id)
+
+
 var _failures: Array[String] = []
 var _checks := 0
 
@@ -43,6 +56,7 @@ func _run() -> void:
 	_test_worker_managed_provider_without_local_key()
 	_test_legacy_provider_selection_migrates_to_worker()
 	_test_invalid_profile_does_not_block_empty_slot()
+	_test_legacy_broken_slot_does_not_block_other_empty_slot()
 	_finish()
 
 
@@ -134,6 +148,25 @@ func _test_legacy_provider_selection_migrates_to_worker() -> void:
 	_expect(
 		String(runtime.get("modelId", "")) == "ai-town-worker-default",
 		"迁移后应自动选择硅基流动默认模型",
+	)
+
+
+func _test_legacy_broken_slot_does_not_block_other_empty_slot() -> void:
+	var catalog: RefCounted = STARTUP_SAVE_CATALOG.new()
+	_expect_ok(catalog.call(
+		"configure",
+		LegacyBrokenSaveStore.new(),
+		"user://tests/town_startup_profile/legacy-broken-slot.json",
+	), "配置旧损坏槽位目录")
+	var result := catalog.call("get_catalog", [
+		{"slotId": "town-main", "displayName": "小镇 1"},
+		{"slotId": "town-2", "displayName": "小镇 2"},
+		{"slotId": "town-3", "displayName": "小镇 3"},
+	]) as Dictionary
+	_expect_ok(result, "单个旧损坏槽位不应阻塞整个启动目录")
+	_expect(
+		String(result.get("firstEmptySlotId", "")) == "town-2",
+		"新游戏应跳过旧损坏槽位并使用下一个空槽",
 	)
 
 

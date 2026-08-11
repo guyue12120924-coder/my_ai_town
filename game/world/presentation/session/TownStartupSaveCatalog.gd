@@ -137,9 +137,16 @@ func get_catalog(slot_definitions_value: Variant) -> Dictionary:
 	for definition_value: Variant in definitions.get("slots", []) as Array:
 		var definition := definition_value as Dictionary
 		var inspected := _inspect_slot(definition)
-		if inspected.get("ok") != true:
+		var slot: Dictionary
+		if inspected.get("ok") == true:
+			slot = inspected.get("slot", {}) as Dictionary
+		elif _can_isolate_unreadable_slot(inspected):
+			# Old browser builds may leave journal directories or JSON records that
+			# no longer satisfy the current schema. Isolate that one slot so another
+			# empty slot can still start a new game; never delete the old data here.
+			slot = _unreadable_slot(definition, inspected)
+		else:
 			return inspected
-		var slot := inspected.get("slot", {}) as Dictionary
 		slots.append(slot)
 		slots_by_id[String(slot.get("slotId", ""))] = slot
 
@@ -201,6 +208,51 @@ func get_catalog(slot_definitions_value: Variant) -> Dictionary:
 		),
 		"firstEmptySlotId": first_empty_slot_id,
 		"slotsFull": first_empty_slot_id.is_empty(),
+	}
+
+
+func _can_isolate_unreadable_slot(failure: Dictionary) -> bool:
+	if bool(failure.get("retryable", false)):
+		return false
+	return String(failure.get("errorCode", "")) in [
+		"STARTUP_SAVE_STORE_RESPONSE_INVALID",
+		"SESSION_SAVE_JOURNAL_STATE_INVALID",
+		"SESSION_SAVE_STORE_JSON_INVALID",
+	]
+
+
+func _unreadable_slot(
+	definition: Dictionary,
+	failure: Dictionary,
+) -> Dictionary:
+	return {
+		"slotId": String(definition.get("slotId", "")),
+		"displayName": String(definition.get("displayName", "")),
+		"state": "corrupt",
+		"recoveryState": "legacy_data_isolated",
+		"continueAvailable": false,
+		"requiresRecoveryConfirmation": false,
+		"recoveryProgressRollback": false,
+		"errorCode": String(failure.get(
+			"errorCode",
+			"STARTUP_SAVE_STORE_RESPONSE_INVALID",
+		)),
+		"latestEvidenceRevision": -1,
+		"latestCompleteRevision": -1,
+		"latestIncompleteRevision": -1,
+		"summary": {},
+		"manifest": {},
+		"sessionConfig": {},
+		"residentMessages": [],
+		"corruptRevisions": [],
+		"damageDetails": {
+			"reason": "legacy_data_isolated",
+			"errorCode": String(failure.get("errorCode", "")),
+		},
+		"continueNotice": {},
+		"saveBlockers": [],
+		"restoreBlockers": [],
+		"agentIntegrity": "not_applicable",
 	}
 
 

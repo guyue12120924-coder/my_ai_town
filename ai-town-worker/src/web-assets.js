@@ -7,7 +7,13 @@ function assetRequest(request, pathname) {
   const url = new URL(request.url);
   url.pathname = pathname;
   url.search = "";
-  return new Request(url.toString(), { method: "GET" });
+  return new Request(url.toString(), {
+    method: "GET",
+    headers: {
+      "Accept-Encoding": "identity",
+      "Cache-Control": "no-cache",
+    },
+  });
 }
 
 async function loadChunkManifest(request, env, pathname) {
@@ -75,21 +81,32 @@ function createChunkStream(request, env, parts) {
   });
 }
 
-function chunkedHeaders(manifest, contentType) {
+function decodedAssetStream(request, env, manifest) {
+  const source = createChunkStream(request, env, manifest.parts);
+  const encoding = String(manifest.contentEncoding || "identity").toLowerCase();
+
+  if (encoding === "gzip") {
+    return source.pipeThrough(new DecompressionStream("gzip"));
+  }
+  if (encoding === "identity" || encoding === "") {
+    return source;
+  }
+
+  throw new Error(`Unsupported web asset encoding: ${encoding}`);
+}
+
+function decodedHeaders(manifest, contentType) {
   const headers = new Headers({
     "Content-Type": manifest.contentType || contentType,
-    "Content-Encoding": manifest.contentEncoding || "gzip",
-    "Cache-Control": "public, max-age=0, must-revalidate",
-    "Vary": "Accept-Encoding",
+    "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "X-AI-Town-Chunked-Asset": "1",
+    "X-AI-Town-Manifest-Version": String(manifest.version || 0),
+    "X-AI-Town-Source-Encoding": String(manifest.contentEncoding || "identity"),
   });
 
   if (manifest.sha256) {
-    headers.set("ETag", `\"sha256-${manifest.sha256}\"`);
-  }
-  if (Number.isFinite(Number(manifest.encodedSize)) && Number(manifest.encodedSize) > 0) {
-    headers.set("Content-Length", String(manifest.encodedSize));
+    headers.set("ETag", `\"sha256-${manifest.sha256}-decoded\"`);
   }
   return headers;
 }
@@ -103,25 +120,48 @@ async function serveLargeAsset(request, env, pathname, contentType) {
     });
   }
 
-  const headers = chunkedHeaders(manifest, contentType);
-  const etag = headers.get("ETag");
-  if (etag && request.headers.get("If-None-Match") === etag) {
-    return new Response(null, { status: 304, headers });
-  }
+  const headers = decodedHeaders(manifest, contentType);
 
   if (request.method === "HEAD") {
-    return new Response(null, { status: 200, headers });
+    if (Number.isFinite(Number(manifest.originalSize)) && Number(manifest.originalSize) > 0) {
+      headers.set("Content-Length", String(manifest.originalSize));
+    }
+    return new Response(null, { status: 200, headers, encodeBody: "manual" });
   }
 
-  // The chunk stream already contains a complete gzip-encoded representation.
-  // Cloudflare defaults to encodeBody="automatic" and may compress a response
-  // again when Content-Encoding is present. Mark the body as pre-encoded so the
-  // browser receives exactly one gzip layer and transparently decodes it before
-  // WebAssembly.instantiateStreaming() sees the bytes.
-  return new Response(createChunkStream(request, env, manifest.parts), {
-    status: 200,
-    headers,
-    encodeBody: "manual",
+  try {
+    return new Response(decodedAssetStream(request, env, manifest), {
+      status: 200,
+      headers,
+      encodeBody: "manual",
+    });
+  } catch (error) {
+    return new Response(`Failed to prepare web asset: ${error?.message || error}`, {
+      status: 500,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
+}
+
+export async function getWebAssetStatus(request, env) {
+  const wasm = await loadChunkManifest(request, env, "/index.wasm");
+  const pck = await loadChunkManifest(request, env, "/index.pck");
+  return Response.json({
+    ok: Boolean(wasm && pck),
+    wasm: wasm ? {
+      version: wasm.version || 0,
+      encoding: wasm.contentEncoding || "identity",
+      parts: wasm.parts.length,
+      originalSize: wasm.originalSize || null,
+    } : null,
+    pck: pck ? {
+      version: pck.version || 0,
+      encoding: pck.contentEncoding || "identity",
+      parts: pck.parts.length,
+      originalSize: pck.originalSize || null,
+    } : null,
+  }, {
+    headers: { "Cache-Control": "no-store" },
   });
 }
 
@@ -141,6 +181,10 @@ export async function handleWebAsset(request, env) {
   }
 
   const pathname = new URL(request.url).pathname;
+  if (pathname === "/web-health") {
+    return getWebAssetStatus(request, env);
+  }
+
   const contentType = LARGE_WEB_ASSETS.get(pathname);
   if (contentType) {
     return serveLargeAsset(request, env, pathname, contentType);

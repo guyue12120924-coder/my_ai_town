@@ -21,6 +21,7 @@ project_text = project.read_text(encoding="utf-8")
 replacements = {
     'window/dpi/allow_hidpi=true': 'window/dpi/allow_hidpi=false',
     'window/size/resizable=false': 'window/size/resizable=true',
+    'window/stretch/mode="canvas_items"': 'window/stretch/mode="disabled"',
 }
 for before, after in replacements.items():
     if after in project_text:

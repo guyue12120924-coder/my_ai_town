@@ -1,4 +1,4 @@
-name: Build Godot Web
+name: Build and Publish Godot Web
 
 on:
   push:
@@ -8,40 +8,149 @@ on:
       - "game/**"
       - "ai-town-worker/**"
       - ".github/workflows/build-web.yml"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "game/**"
-      - "ai-town-worker/**"
-      - ".github/workflows/build-web.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: godot-web-${{ github.ref }}
+  group: godot-web-publish
   cancel-in-progress: true
 
 jobs:
-  export-web:
+  publish-web-dist:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
+          fetch-depth: 2
           sparse-checkout: |
             game
             ai-town-worker
+            .github
           sparse-checkout-cone-mode: true
 
+      - name: Decide whether Godot export is needed
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          rebuild=true
+
+          if git ls-remote --exit-code --heads origin web-dist >/dev/null 2>&1; then
+            rebuild=false
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            rebuild=true
+          elif [[ "$rebuild" == "false" ]]; then
+            before="${{ github.event.before }}"
+            if [[ -z "$before" || "$before" == "0000000000000000000000000000000000000000" ]]; then
+              rebuild=true
+            else
+              git fetch --no-tags --depth=1 origin "$before" || true
+              if git diff --name-only "$before" "$GITHUB_SHA" -- \
+                game \
+                ai-town-worker/build-web.sh \
+                .github/workflows/build-web.yml \
+                | grep -q .; then
+                rebuild=true
+              fi
+            fi
+          fi
+
+          echo "rebuild=$rebuild" >> "$GITHUB_OUTPUT"
+          echo "Godot rebuild required: $rebuild"
+
+      - name: Restore Godot caches
+        if: steps.plan.outputs.rebuild == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ai-town-godot
+            ~/.local/share/godot/export_templates/4.7.stable
+            game/.godot/imported
+            game/.godot/uid_cache.bin
+          key: godot-web-4.7-${{ runner.os }}-${{ hashFiles('game/project.godot', 'game/export_presets.cfg', 'ai-town-worker/build-web.sh') }}
+          restore-keys: |
+            godot-web-4.7-${{ runner.os }}-
+
       - name: Build Cloudflare-ready Godot Web release
+        if: steps.plan.outputs.rebuild == 'true'
         shell: bash
         run: bash ai-town-worker/build-web.sh
 
-      - name: Validate chunk manifests
+      - name: Reuse last Web build for Worker-only changes
+        if: steps.plan.outputs.rebuild != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin web-dist
+          rm -rf ai-town-worker/public
+          git archive FETCH_HEAD ai-town-worker/public | tar -x
+          test -f ai-town-worker/public/index.html
+          echo "Reused existing web-dist assets; no Godot export was needed."
+
+      - name: Fix browser canvas coordinate mapping
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("ai-town-worker/public/index.html")
+          html = path.read_text(encoding="utf-8")
+
+          forced_css = '''
+          html, body {
+          \twidth: 100%;
+          \theight: 100%;
+          }
+
+          #canvas {
+          \tposition: fixed;
+          \tinset: 0;
+          \twidth: 100vw !important;
+          \theight: 100vh !important;
+          \tmax-width: none !important;
+          \tmax-height: none !important;
+          \tpointer-events: auto !important;
+          }
+
+          #status {
+          \tpointer-events: none;
+          }
+          '''
+          safe_css = '''
+          #canvas {
+          \tpointer-events: auto !important;
+          }
+
+          #status {
+          \tpointer-events: none;
+          }
+          '''
+
+          if forced_css in html:
+              html = html.replace(forced_css, safe_css, 1)
+
+          html = html.replace(
+              "\\t\\t\\tfocusCanvas: true,\\n",
+              "\\t\\t\\tcanvas: canvas,\\n",
+              1,
+          )
+
+          if "width: 100vw !important" in html or "height: 100vh !important" in html:
+              raise SystemExit("Forced canvas CSS is still present")
+          if "canvas: canvas" not in html:
+              raise SystemExit("Godot engine is not bound to the visible canvas")
+
+          path.write_text(html, encoding="utf-8")
+          PY
+
+      - name: Validate Web assets
         shell: bash
         run: |
           set -euo pipefail
@@ -59,18 +168,57 @@ jobs:
           root = Path("ai-town-worker/public")
           for name in ("index.wasm", "index.pck"):
               manifest = json.loads((root / f"{name}.parts.json").read_text(encoding="utf-8"))
-              assert manifest["contentEncoding"] == "gzip"
-              assert manifest["parts"]
+              assert manifest["contentEncoding"] == "identity", manifest
+              assert manifest["parts"], manifest
               for part in manifest["parts"]:
                   path = root / part
                   assert path.is_file(), path
                   assert path.stat().st_size < 25 * 1024 * 1024, path
           PY
 
-      - name: Upload Web build artifact
-        uses: actions/upload-artifact@v4
+      - name: Prepare minimal Cloudflare deployment tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .web-dist
+          mkdir -p \
+            .web-dist/ai-town-worker/src \
+            .web-dist/ai-town-worker/public \
+            .web-dist/vendor/unlimited-ai-first/src
+
+          cp -a ai-town-worker/src/. .web-dist/ai-town-worker/src/
+          cp -a ai-town-worker/public/. .web-dist/ai-town-worker/public/
+
+          curl --fail --location --retry 3 \
+            "https://raw.githubusercontent.com/guyue12120924-coder/unlimited-ai-first/64409d7ad930e7ff5948f2c15764c440741d01ae/src/context.js" \
+            --output .web-dist/vendor/unlimited-ai-first/src/context.js
+
+          cat > .web-dist/ai-town-worker/wrangler.toml <<'EOF'
+          name = "my-ai-town-agent"
+          main = "src/web-worker.js"
+          compatibility_date = "2026-08-10"
+          keep_vars = true
+          workers_dev = true
+
+          [assets]
+          directory = "./public"
+          binding = "ASSETS"
+          EOF
+
+          cat > .web-dist/README.md <<EOF
+          # AI Town Web deployment
+
+          Generated from main commit: ${GITHUB_SHA}
+
+          This branch contains only the Cloudflare Worker runtime and prebuilt Godot Web assets.
+          Do not edit it manually.
+          EOF
+
+      - name: Publish web-dist branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          name: ai-town-web-cloudflare
-          path: ai-town-worker/public
-          if-no-files-found: error
-          retention-days: 7
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: web-dist
+          publish_dir: ./.web-dist
+          force_orphan: true
+          commit_message: "deploy: AI Town Web ${{ github.sha }}"

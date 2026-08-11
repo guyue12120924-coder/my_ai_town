@@ -268,7 +268,13 @@ func _replace_validated_file(
 func _encryption_password() -> Dictionary:
 	var device_id := OS.get_unique_id().strip_edges()
 	if device_id.is_empty():
-		return _failure("PROVIDER_CREDENTIAL_DEVICE_ID_UNAVAILABLE")
+		# Browsers do not expose a stable hardware identifier. Web user:// data is
+		# already isolated by browser profile and origin, so use an origin-scoped
+		# project seed instead of making the entire Provider settings service fail.
+		if OS.has_feature("web"):
+			device_id = _web_storage_seed()
+		else:
+			return _failure("PROVIDER_CREDENTIAL_DEVICE_ID_UNAVAILABLE")
 	var project_name := String(
 		ProjectSettings.get_setting("application/config/name", "ai-town")
 	).strip_edges()
@@ -276,6 +282,19 @@ func _encryption_password() -> Dictionary:
 		"%s|%s|%s" % [CREDENTIAL_NAMESPACE, project_name, device_id]
 	).sha256_text()
 	return _success({"password": password})
+
+
+func _web_storage_seed() -> String:
+	var origin := "browser-origin"
+	if ClassDB.class_exists("JavaScriptBridge"):
+		var origin_value: Variant = JavaScriptBridge.eval(
+			"window.location.origin",
+		)
+		if typeof(origin_value) == TYPE_STRING:
+			var candidate := (origin_value as String).strip_edges()
+			if not candidate.is_empty():
+				origin = candidate
+	return "%s|%s" % [CREDENTIAL_NAMESPACE, origin]
 
 
 func _provider_id_is_valid(provider_id: String) -> bool:

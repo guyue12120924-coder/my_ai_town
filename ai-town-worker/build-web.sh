@@ -131,7 +131,7 @@ PY
 chunk_large_asset "$OUT_DIR/index.wasm" "application/wasm"
 chunk_large_asset "$OUT_DIR/index.pck" "application/octet-stream"
 
-echo "Patching Godot HTML for chunked PCK loading and reliable browser input..."
+echo "Patching Godot HTML for chunked PCK loading and browser input..."
 python3 - "$OUT_DIR/index.html" <<'PY'
 from pathlib import Path
 import re
@@ -140,19 +140,11 @@ import sys
 html_path = Path(sys.argv[1])
 html = html_path.read_text(encoding="utf-8")
 
+# Do not resize or reposition the canvas with CSS. Godot's Adaptive policy owns
+# both the backing-store size and the visible canvas geometry so pointer
+# coordinates and rendered controls stay in the same coordinate space.
 interaction_css = r'''
-html, body {
-	width: 100%;
-	height: 100%;
-}
-
 #canvas {
-	position: fixed;
-	inset: 0;
-	width: 100vw !important;
-	height: 100vh !important;
-	max-width: none !important;
-	max-height: none !important;
 	pointer-events: auto !important;
 }
 
@@ -249,8 +241,8 @@ replacement = r'''\t\tsetStatusMode('progress');
 \t\t\tloadChunkedMainPack().then((buffer) => engine.preloadFile(buffer, 'index.pck')),
 \t\t]).then(() => engine.start({
 \t\t\targs: ['--main-pack', 'index.pck'],
+\t\t\tcanvas: canvas,
 \t\t\tcanvasResizePolicy: 2,
-\t\t\tfocusCanvas: true,
 \t\t\t'onProgress': updateDownloadProgress,
 \t\t})).then(() => {
 \t\t\tsetStatusMode('hidden');

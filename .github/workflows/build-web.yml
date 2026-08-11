@@ -222,3 +222,19 @@ jobs:
           publish_dir: ./.web-dist
           force_orphan: true
           commit_message: "deploy: AI Town Web ${{ github.sha }}"
+
+      - name: Trigger fast production refresh
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '%s\n' "$GITHUB_SHA" > ai-town-worker/web-dist-source.txt
+          git add ai-town-worker/web-dist-source.txt
+          if git diff --cached --quiet; then
+            echo "Production refresh marker already current."
+          else
+            git commit -m "chore: refresh prebuilt web deployment"
+            git push origin HEAD:main
+          fi

@@ -799,7 +799,12 @@ func _adopt_runtime_display(display: Dictionary, feedback_code: String) -> void:
 
 func _apply_display_draft(display: Dictionary) -> Dictionary:
 	var mode_id := String(display.get("windowModeId", "windowed"))
-	if _display_available():
+	# A Web export lives inside a browser-owned viewport. Calling
+	# DisplayServer.window_set_size(), changing Window.content_scale_size, or
+	# marking the Window unresizable makes Godot render a fixed 16:9 surface
+	# inside the adaptive HTML canvas. The unused top/right area then becomes a
+	# black frame. Desktop builds still own their native window geometry.
+	if _display_changes_available():
 		if _display_changes_blocked_by_embedding():
 			return _failure(
 				"DISPLAY_CHANGES_UNSUPPORTED_WHILE_EMBEDDED",
@@ -1168,7 +1173,18 @@ func _display_available() -> bool:
 
 
 func _display_changes_available() -> bool:
-	return _display_available() and not _display_changes_blocked_by_embedding()
+	return (
+		_display_available()
+		and not _is_web_runtime()
+		and not _display_changes_blocked_by_embedding()
+	)
+
+
+func _is_web_runtime() -> bool:
+	return (
+		OS.has_feature("web")
+		or _display_server_name().to_lower() == "web"
+	)
 
 
 func _display_changes_blocked_by_embedding() -> bool:
@@ -1326,7 +1342,7 @@ func _set_logical_canvas_size(size: Vector2i) -> void:
 
 func _enforce_window_constraints() -> void:
 	var window := _root_window()
-	if window == null:
+	if window == null or _is_web_runtime():
 		return
 	window.unresizable = true
 	if (

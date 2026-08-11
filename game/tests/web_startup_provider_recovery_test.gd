@@ -43,6 +43,19 @@ class LegacyBrokenSaveStore:
 		return super.list_incomplete(slot_id)
 
 
+class UnknownLegacyStoreFailure:
+	extends EmptySaveStore
+
+	func list_incomplete(slot_id: String) -> Dictionary:
+		if slot_id == "town-main":
+			return {
+				"ok": false,
+				"errorCode": "SESSION_SAVE_LEGACY_LAYOUT_UNSUPPORTED",
+				"retryable": false,
+			}
+		return super.list_incomplete(slot_id)
+
+
 var _failures: Array[String] = []
 var _checks := 0
 
@@ -57,6 +70,7 @@ func _run() -> void:
 	_test_legacy_provider_selection_migrates_to_worker()
 	_test_invalid_profile_does_not_block_empty_slot()
 	_test_legacy_broken_slot_does_not_block_other_empty_slot()
+	_test_unknown_nonretryable_store_failure_is_isolated()
 	_finish()
 
 
@@ -167,6 +181,24 @@ func _test_legacy_broken_slot_does_not_block_other_empty_slot() -> void:
 	_expect(
 		String(result.get("firstEmptySlotId", "")) == "town-2",
 		"新游戏应跳过旧损坏槽位并使用下一个空槽",
+	)
+
+
+func _test_unknown_nonretryable_store_failure_is_isolated() -> void:
+	var catalog: RefCounted = STARTUP_SAVE_CATALOG.new()
+	_expect_ok(catalog.call(
+		"configure",
+		UnknownLegacyStoreFailure.new(),
+		"user://tests/town_startup_profile/unknown-legacy-store.json",
+	), "配置未知旧存储错误目录")
+	var result := catalog.call("get_catalog", [
+		{"slotId": "town-main", "displayName": "小镇 1"},
+		{"slotId": "town-2", "displayName": "小镇 2"},
+	]) as Dictionary
+	_expect_ok(result, "未知但不可重试的单槽存储错误应被隔离")
+	_expect(
+		String(result.get("firstEmptySlotId", "")) == "town-2",
+		"未知旧存储错误也应允许使用其他空槽",
 	)
 
 

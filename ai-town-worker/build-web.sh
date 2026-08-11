@@ -131,7 +131,7 @@ PY
 chunk_large_asset "$OUT_DIR/index.wasm" "application/wasm"
 chunk_large_asset "$OUT_DIR/index.pck" "application/octet-stream"
 
-echo "Patching Godot HTML to preload the main PCK from static chunks..."
+echo "Patching Godot HTML for chunked PCK loading and reliable browser input..."
 python3 - "$OUT_DIR/index.html" <<'PY'
 from pathlib import Path
 import re
@@ -139,6 +139,32 @@ import sys
 
 html_path = Path(sys.argv[1])
 html = html_path.read_text(encoding="utf-8")
+
+interaction_css = r'''
+html, body {
+	width: 100%;
+	height: 100%;
+}
+
+#canvas {
+	position: fixed;
+	inset: 0;
+	width: 100vw !important;
+	height: 100vh !important;
+	max-width: none !important;
+	max-height: none !important;
+	pointer-events: auto !important;
+}
+
+#status {
+	pointer-events: none;
+}
+'''
+style_marker = "\t\t</style>"
+if style_marker not in html:
+    raise SystemExit("Could not find Godot style block while patching web input CSS")
+html = html.replace(style_marker, interaction_css + "\n" + style_marker, 1)
+
 pattern = re.compile(
     r"\t\tsetStatusMode\('progress'\);\n"
     r"\t\tengine\.startGame\(\{\n.*?\n"
@@ -148,6 +174,22 @@ pattern = re.compile(
     re.S,
 )
 replacement = r'''\t\tsetStatusMode('progress');
+
+\t\tconst canvas = document.getElementById('canvas');
+\t\tif (canvas) {
+\t\t\tcanvas.tabIndex = 0;
+\t\t\tconst focusCanvas = () => {
+\t\t\t\ttry {
+\t\t\t\t\tcanvas.focus({ preventScroll: true });
+\t\t\t\t} catch (_) {
+\t\t\t\t\tcanvas.focus();
+\t\t\t\t}
+\t\t\t};
+\t\t\tcanvas.addEventListener('pointerdown', focusCanvas, { capture: true });
+\t\t\tcanvas.addEventListener('mousedown', focusCanvas, { capture: true });
+\t\t\tcanvas.addEventListener('touchstart', focusCanvas, { capture: true, passive: true });
+\t\t\twindow.addEventListener('focus', focusCanvas);
+\t\t}
 
 \t\tconst updateDownloadProgress = function (current, total) {
 \t\t\tif (current > 0 && total > 0) {
@@ -207,9 +249,20 @@ replacement = r'''\t\tsetStatusMode('progress');
 \t\t\tloadChunkedMainPack().then((buffer) => engine.preloadFile(buffer, 'index.pck')),
 \t\t]).then(() => engine.start({
 \t\t\targs: ['--main-pack', 'index.pck'],
+\t\t\tcanvasResizePolicy: 2,
+\t\t\tfocusCanvas: true,
 \t\t\t'onProgress': updateDownloadProgress,
 \t\t})).then(() => {
 \t\t\tsetStatusMode('hidden');
+\t\t\tif (canvas) {
+\t\t\t\trequestAnimationFrame(() => {
+\t\t\t\t\ttry {
+\t\t\t\t\t\tcanvas.focus({ preventScroll: true });
+\t\t\t\t\t} catch (_) {
+\t\t\t\t\t\tcanvas.focus();
+\t\t\t\t\t}
+\t\t\t\t});
+\t\t\t}
 \t\t}, displayFailureNotice);'''
 
 patched, count = pattern.subn(replacement, html, count=1)

@@ -69,37 +69,33 @@ chunk_large_asset() {
   local filename
   filename="$(basename "$file")"
 
-  local original_size encoded_size sha256 compressed prefix manifest
+  local original_size sha256 prefix manifest
   original_size="$(stat -c%s "$file")"
   sha256="$(sha256sum "$file" | awk '{print $1}')"
-  compressed="$OUT_DIR/.${filename}.gzip"
   prefix="$OUT_DIR/${filename}.chunk."
   manifest="$OUT_DIR/${filename}.parts.json"
 
-  echo "Compressing ${filename}..."
-  gzip -9 -c "$file" > "$compressed"
-  encoded_size="$(stat -c%s "$compressed")"
+  echo "Splitting raw ${filename} into Cloudflare-safe chunks..."
+  split -b "$CHUNK_BYTES" -d -a 3 --additional-suffix=.bin "$file" "$prefix"
+  rm -f "$file"
 
-  split -b "$CHUNK_BYTES" -d -a 3 --additional-suffix=.bin "$compressed" "$prefix"
-  rm -f "$compressed" "$file"
-
-  python3 - "$OUT_DIR" "$filename" "$content_type" "$original_size" "$encoded_size" "$sha256" "$manifest" <<'PY'
+  python3 - "$OUT_DIR" "$filename" "$content_type" "$original_size" "$sha256" "$manifest" <<'PY'
 import glob
 import json
 import os
 import sys
 
-out_dir, filename, content_type, original_size, encoded_size, sha256, manifest_path = sys.argv[1:]
+out_dir, filename, content_type, original_size, sha256, manifest_path = sys.argv[1:]
 parts = sorted(glob.glob(os.path.join(out_dir, f"{filename}.chunk.*.bin")))
 if not parts:
     raise SystemExit(f"No chunks generated for {filename}")
 
 payload = {
-    "version": 1,
+    "version": 2,
     "contentType": content_type,
-    "contentEncoding": "gzip",
+    "contentEncoding": "identity",
     "originalSize": int(original_size),
-    "encodedSize": int(encoded_size),
+    "encodedSize": int(original_size),
     "sha256": sha256,
     "parts": [os.path.basename(path) for path in parts],
 }
@@ -122,8 +118,14 @@ PY
     fi
   done
 
-  cat "${parts[@]}" | gzip -t
-  echo "${filename}: original=${original_size} encoded=${encoded_size} chunks=${#parts[@]}"
+  local rebuilt_sha
+  rebuilt_sha="$(cat "${parts[@]}" | sha256sum | awk '{print $1}')"
+  if [[ "$rebuilt_sha" != "$sha256" ]]; then
+    echo "Chunk reassembly checksum mismatch for ${filename}" >&2
+    exit 24
+  fi
+
+  echo "${filename}: raw=${original_size} bytes chunks=${#parts[@]} sha256=${sha256}"
 }
 
 chunk_large_asset "$OUT_DIR/index.wasm" "application/wasm"

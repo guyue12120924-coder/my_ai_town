@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
+		<title>我的ai小镇</title>
+		<style>
+html, body, #canvas {
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+body {
+	color: white;
+	background-color: black;
+	overflow: hidden;
+	touch-action: none;
+}
+
+#canvas {
+	display: block;
+}
+
+#canvas:focus {
+	outline: none;
+}
+
+#status, #status-splash, #status-progress {
+	position: absolute;
+	left: 0;
+	right: 0;
+}
+
+#status, #status-splash {
+	top: 0;
+	bottom: 0;
+}
+
+#status {
+	background-color: #242424;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
+	visibility: hidden;
+}
+
+#status-splash {
+	max-height: 100%;
+	max-width: 100%;
+	margin: auto;
+}
+
+#status-splash.show-image--false {
+	display: none;
+}
+
+#status-splash.fullsize--true {
+	height: 100%;
+	width: 100%;
+	object-fit: contain;
+}
+
+#status-splash.use-filter--false {
+	image-rendering: pixelated;
+}
+
+#status-progress, #status-notice {
+	display: none;
+}
+
+#status-progress {
+	bottom: 10%;
+	width: 50%;
+	margin: 0 auto;
+}
+
+#status-notice {
+	background-color: #5b3943;
+	border-radius: 0.5rem;
+	border: 1px solid #9b3943;
+	color: #e0e0e0;
+	font-family: 'Noto Sans', 'Droid Sans', Arial, sans-serif;
+	line-height: 1.3;
+	margin: 0 2rem;
+	overflow: hidden;
+	padding: 1rem;
+	text-align: center;
+	z-index: 1;
+}
+
+html, body {
+	background: #152d25 !important;
+}
+
+#canvas {
+	background: #152d25 !important;
+	pointer-events: auto !important;
+}
+
+#status {
+	pointer-events: none;
+}
+
+		</style>
+		<link id="-gd-engine-icon" rel="icon" type="image/png" href="index.icon.png" />
+<link rel="apple-touch-icon" href="index.apple-touch-icon.png"/>
+
+	</head>
+	<body>
+		<canvas id="canvas">
+			Your browser does not support the canvas tag.
+		</canvas>
+
+		<noscript>
+			Your browser does not support JavaScript.
+		</noscript>
+
+		<div id="status">
+			<img id="status-splash" class="show-image--true fullsize--true use-filter--true" src="index.png" alt="">
+			<progress id="status-progress"></progress>
+			<div id="status-notice"></div>
+		</div>
+
+		<script src="index.js"></script>
+		<script>
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":291777300,"index.wasm":39509339},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_THREADS_ENABLED = false;
+const engine = new Engine(GODOT_CONFIG);
+
+(function () {
+	const statusOverlay = document.getElementById('status');
+	const statusProgress = document.getElementById('status-progress');
+	const statusNotice = document.getElementById('status-notice');
+
+	let initializing = true;
+	let statusMode = '';
+
+	function setStatusMode(mode) {
+		if (statusMode === mode || !initializing) {
+			return;
+		}
+		if (mode === 'hidden') {
+			statusOverlay.remove();
+			initializing = false;
+			return;
+		}
+		statusOverlay.style.visibility = 'visible';
+		statusProgress.style.display = mode === 'progress' ? 'block' : 'none';
+		statusNotice.style.display = mode === 'notice' ? 'block' : 'none';
+		statusMode = mode;
+	}
+
+	function setStatusNotice(text) {
+		while (statusNotice.lastChild) {
+			statusNotice.removeChild(statusNotice.lastChild);
+		}
+		const lines = text.split('\n');
+		lines.forEach((line) => {
+			statusNotice.appendChild(document.createTextNode(line));
+			statusNotice.appendChild(document.createElement('br'));
+		});
+	}
+
+	function displayFailureNotice(err) {
+		console.error(err);
+		if (err instanceof Error) {
+			setStatusNotice(err.message);
+		} else if (typeof err === 'string') {
+			setStatusNotice(err);
+		} else {
+			setStatusNotice('An unknown error occurred.');
+		}
+		setStatusMode('notice');
+		initializing = false;
+	}
+
+	const missing = Engine.getMissingFeatures({
+		threads: GODOT_THREADS_ENABLED,
+	});
+
+	if (missing.length !== 0) {
+		if (GODOT_CONFIG['serviceWorker'] && GODOT_CONFIG['ensureCrossOriginIsolationHeaders'] && 'serviceWorker' in navigator) {
+			let serviceWorkerRegistrationPromise;
+			try {
+				serviceWorkerRegistrationPromise = navigator.serviceWorker.getRegistration();
+			} catch (err) {
+				serviceWorkerRegistrationPromise = Promise.reject(new Error('Service worker registration failed.'));
+			}
+			// There's a chance that installing the service worker would fix the issue
+			Promise.race([
+				serviceWorkerRegistrationPromise.then((registration) => {
+					if (registration != null) {
+						return Promise.reject(new Error('Service worker already exists.'));
+					}
+					return registration;
+				}).then(() => engine.installServiceWorker()),
+				// For some reason, `getRegistration()` can stall
+				new Promise((resolve) => {
+					setTimeout(() => resolve(), 2000);
+				}),
+			]).then(() => {
+				// Reload if there was no error.
+				window.location.reload();
+			}).catch((err) => {
+				console.error('Error while registering service worker:', err);
+			});
+		} else {
+			// Display the message as usual
+			const missingMsg = 'Error\nThe following features required to run Godot projects on the Web are missing:\n';
+			displayFailureNotice(missingMsg + missing.join('\n'));
+		}
+	} else {
+		setStatusMode('progress');
+
+		const canvas = document.getElementById('canvas');
+		if (canvas) {
+			canvas.tabIndex = 0;
+			const focusCanvas = () => {
+				try {
+					canvas.focus({ preventScroll: true });
+				} catch (_) {
+					canvas.focus();
+				}
+			};
+			canvas.addEventListener('pointerdown', focusCanvas, { capture: true });
+			canvas.addEventListener('mousedown', focusCanvas, { capture: true });
+			canvas.addEventListener('touchstart', focusCanvas, { capture: true, passive: true });
+			window.addEventListener('focus', focusCanvas);
+		}
+
+		const updateDownloadProgress = function (current, total) {
+			if (current > 0 && total > 0) {
+				statusProgress.value = current;
+				statusProgress.max = total;
+			} else {
+				statusProgress.removeAttribute('value');
+				statusProgress.removeAttribute('max');
+			}
+		};
+
+		async function loadChunkedMainPack() {
+			const manifestResponse = await fetch('index.pck.parts.json', { cache: 'no-store' });
+			if (!manifestResponse.ok) {
+				throw new Error(`Failed to load PCK manifest: HTTP ${manifestResponse.status}`);
+			}
+			const manifest = await manifestResponse.json();
+			if (!manifest || manifest.contentEncoding !== 'identity' || !Array.isArray(manifest.parts) || manifest.parts.length === 0) {
+				throw new Error('Invalid raw PCK chunk manifest.');
+			}
+
+			const total = Number(manifest.originalSize || manifest.encodedSize || 0);
+			if (!Number.isSafeInteger(total) || total <= 0) {
+				throw new Error('Invalid PCK size in manifest.');
+			}
+
+			const merged = new Uint8Array(total);
+			let offset = 0;
+			for (const part of manifest.parts) {
+				if (!/^[A-Za-z0-9._-]+$/.test(String(part))) {
+					throw new Error(`Invalid PCK chunk name: ${part}`);
+				}
+				const response = await fetch(String(part), { cache: 'no-store' });
+				if (!response.ok) {
+					throw new Error(`Failed to load PCK chunk ${part}: HTTP ${response.status}`);
+				}
+				const bytes = new Uint8Array(await response.arrayBuffer());
+				if (offset + bytes.byteLength > merged.byteLength) {
+					throw new Error(`PCK chunk overflow at ${part}`);
+				}
+				merged.set(bytes, offset);
+				offset += bytes.byteLength;
+				updateDownloadProgress(offset, total);
+			}
+
+			if (offset !== total) {
+				throw new Error(`PCK size mismatch: expected ${total}, received ${offset}`);
+			}
+			if (merged[0] !== 0x47 || merged[1] !== 0x44 || merged[2] !== 0x50 || merged[3] !== 0x43) {
+				throw new Error(`Invalid PCK header: ${Array.from(merged.slice(0, 4)).map((v) => v.toString(16).padStart(2, '0')).join(' ')}`);
+			}
+			return merged.buffer;
+		}
+
+		Promise.all([
+			engine.init('index'),
+			loadChunkedMainPack().then((buffer) => engine.preloadFile(buffer, 'index.pck')),
+		]).then(() => engine.start({
+			args: ['--main-pack', 'index.pck'],
+			canvas: canvas,
+			canvasResizePolicy: 2,
+			'onProgress': updateDownloadProgress,
+		})).then(() => {
+			setStatusMode('hidden');
+			if (canvas) {
+				requestAnimationFrame(() => {
+					try {
+						canvas.focus({ preventScroll: true });
+					} catch (_) {
+						canvas.focus();
+					}
+				});
+			}
+		}, displayFailureNotice);
+	}
+}());
+		</script>
+	</body>
+</html>
+

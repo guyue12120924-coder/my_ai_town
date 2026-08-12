@@ -1,0 +1,9 @@
+name = "my-ai-town-agent"
+main = "src/web-worker.js"
+compatibility_date = "2026-08-10"
+keep_vars = true
+workers_dev = true
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
